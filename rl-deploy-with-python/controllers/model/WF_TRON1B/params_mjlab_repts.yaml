@@ -1,0 +1,78 @@
+PointfootCfg:
+  loop_frequency: 500
+  joint_names:
+    - "abad_L_Joint"
+    - "hip_L_Joint"
+    - "knee_L_Joint"
+    - "wheel_L_Joint"
+    - "abad_R_Joint"
+    - "hip_R_Joint"
+    - "knee_R_Joint"
+    - "wheel_R_Joint"
+
+  init_state:
+    # target angles [rad] when action = 0.0
+    default_joint_angle:
+      abad_L_Joint: 0.0
+      hip_L_Joint: 0.0
+      knee_L_Joint: 0.0
+      wheel_L_Joint: 0.0
+
+      abad_R_Joint: 0.0
+      hip_R_Joint: 0.0
+      knee_R_Joint: 0.0
+      wheel_R_Joint: 0.0
+
+  control:
+    stiffness: 40.0
+    damping: 1.8
+    wheel_joint_damping: 0.5
+    wheel_joint_torque_limit: 40
+    action_scale_pos: 0.5
+    leg_action_scale: 0.5
+    wheel_action_scale: 10.0
+    action_clip: 2.0
+    decimation: 10
+    user_torque_limit: 80
+
+  normalization:
+    clip_scales:
+      clip_observations: 100.
+      clip_actions: 2.
+    obs_scales:
+      lin_vel: 1.0
+      ang_vel: 1.0
+      dof_pos: 1.0
+      dof_vel: 0.05
+      wheel_vel: 0.5
+
+  observation_noise:
+    enabled: true
+    seed: null
+    ranges:
+      base_ang_vel: [-0.05, 0.05]
+      projected_gravity: [-0.05, 0.05]
+      joint_pos: [-0.01, 0.01]
+      joint_vel: [-0.05, 0.05]
+      wheel_vel: [-0.05, 0.05]
+
+  size:
+    actions_size: 8
+    observations_size: 31
+    commands_size: 3
+    obs_history_length: 5
+    jointpos_idxs: [0, 1, 2, 4, 5, 6]
+    encoder_output_size: 0
+
+  stand_mode:
+    stand_duration: 1.0
+
+  imu_orientation_offset:
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
+
+  user_cmd_scales:
+    lin_vel_x: 1.0
+    lin_vel_y: 1.0
+    ang_vel_yaw: 1.0

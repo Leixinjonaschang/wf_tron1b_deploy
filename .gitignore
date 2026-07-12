@@ -1,0 +1,12 @@
+.venv/
+logs/
+.codegraph/
+.codex/
+.agents/
+.cursor/
+
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+MUJOCO_LOG.TXT

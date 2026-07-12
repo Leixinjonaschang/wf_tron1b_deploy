@@ -13,9 +13,15 @@ This repository packages WF_TRON1B MuJoCo simulation and Python RL deployment as
 
 ## Build, Test, and Development Commands
 
-- `uv sync`: create/update the local Python 3.13 environment from `pyproject.toml` and `uv.lock`.
+- `uv sync`: create/update the local Python environment from `pyproject.toml` and `uv.lock`.
+- ROS2 Humble deployment should use system Python with ROS site packages visible:
+  `source /opt/ros/humble/setup.bash && uv venv --python /usr/bin/python3 --system-site-packages .venv`.
+  Then install the locked pip layer with
+  `uv export --frozen --no-hashes -o /tmp/wf_tron1b_requirements.txt && uv pip sync /tmp/wf_tron1b_requirements.txt`.
+  Smoke-check with
+  `.venv/bin/python -c "import rclpy, sensor_msgs.msg, mujoco, onnxruntime, scipy, limxsdk"`.
 - `ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts ./start_sim2sim.sh`: launch MuJoCo sim2sim with the default WF_TRON1B policy.
-- `ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth ./start_sim2sim.sh`: launch depth-enabled sim2sim over ROS `/camera/depth/image_rect_raw`.
+- `ROS_TYPE=ros2 PYTHON=$PWD/.venv/bin/python ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth ./start_sim2sim.sh`: launch depth-enabled sim2sim over ROS2 `/camera/depth/image_rect_raw`.
 - `uv run python pointfoot-mujoco-sim/simulator.py 127.0.0.1`: run only the simulator.
 - `ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts uv run python rl-deploy-with-python/main.py 127.0.0.1`: run only the controller.
 - `uv run --with pytest pytest rl-deploy-with-python/tests`: run the test suite.
@@ -23,7 +29,7 @@ This repository packages WF_TRON1B MuJoCo simulation and Python RL deployment as
 
 ## Coding Style & Naming Conventions
 
-Use Python 3.13-compatible code. Follow PEP 8: four-space indentation, `snake_case` for functions and variables, `PascalCase` for classes, and uppercase constants such as `ROBOT_TYPE` or `POLICY_PATH`. Keep scripts executable only when they are intended to be run directly. Prefer `pathlib.Path` for filesystem paths in Python tests and helper code.
+Use Python 3.10-compatible code. Follow PEP 8: four-space indentation, `snake_case` for functions and variables, `PascalCase` for classes, and uppercase constants such as `ROBOT_TYPE` or `POLICY_PATH`. Keep scripts executable only when they are intended to be run directly. Prefer `pathlib.Path` for filesystem paths in Python tests and helper code.
 
 ## Testing Guidelines
 
@@ -31,7 +37,7 @@ Tests live in `rl-deploy-with-python/tests` and should be named `test_*.py`. Add
 
 ## ROS Depth Workflow
 
-`mjlab_repts_lin_depth` uses ROS1 `sensor_msgs/Image` by default. The simulator publishes depth with `MJLAB_DEPTH_SINK=ros`; the controller consumes it with `MJLAB_DEPTH_SOURCE=ros`. Keep the shared topic default `/camera/depth/image_rect_raw` unless matching a real camera launch. The legacy file path remains available with `MJLAB_DEPTH_SOURCE=npy_live MJLAB_DEPTH_SINK=npy`.
+`mjlab_repts_lin_depth` uses ROS `sensor_msgs/Image` with `16UC1` millimeter depth frames. Set `ROS_TYPE=ros1` or `ROS_TYPE=ros2`; if omitted, the launcher falls back only to a sourced `ROS_VERSION=1|2`. The simulator publishes depth with `MJLAB_DEPTH_SINK=ros`; the controller consumes it with `MJLAB_DEPTH_SOURCE=ros`. Keep the shared topic default `/camera/depth/image_rect_raw` unless matching a real camera launch. The legacy file path remains available with `MJLAB_DEPTH_SOURCE=npy_live MJLAB_DEPTH_SINK=npy`.
 
 ## Commit & Pull Request Guidelines
 

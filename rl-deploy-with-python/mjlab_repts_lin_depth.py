@@ -202,6 +202,7 @@ def preprocess_depth_image(
 class DepthSourceConfig:
     source: str = "zero"
     ros_topic: str | None = None
+    ros_type: str | None = None
     encoding: str | None = None
     depth_scale: float | None = None
     min_depth: float = 0.0
@@ -276,30 +277,36 @@ class NpyLiveDepthFrameSource(DepthFrameSource):
             time.sleep(0.001)
 
 
-class RosDepthFrameSource(DepthFrameSource):
-    """ROS sensor_msgs/Image depth source for sim2real deployment."""
+def _resolve_ros_type(explicit: str | None = None) -> str:
+    value = explicit or os.getenv("ROS_TYPE")
+    if value:
+        normalized = value.strip().lower()
+        if normalized in ("1", "ros1"):
+            return "ros1"
+        if normalized in ("2", "ros2"):
+            return "ros2"
+        raise ValueError("ROS_TYPE must be 'ros1' or 'ros2'")
+
+    ros_version = os.getenv("ROS_VERSION")
+    if ros_version == "1":
+        return "ros1"
+    if ros_version == "2":
+        return "ros2"
+
+    raise RuntimeError(
+        "ROS depth requires ROS_TYPE=ros1|ros2, or a sourced ROS environment "
+        "with ROS_VERSION=1|2."
+    )
+
+
+class _BufferedRosDepthFrameSource(DepthFrameSource):
+    """Shared ROS Image buffering and staleness checks."""
 
     def __init__(self, cfg: DepthSourceConfig):
-        if not cfg.ros_topic:
-            raise ValueError("depth.ros_topic is required when depth.source is 'ros'")
-        try:
-            import rospy
-            from sensor_msgs.msg import Image
-        except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "ROS depth source requires rospy and sensor_msgs. Source the ROS "
-                "workspace before running with depth.source=ros."
-            ) from exc
-
-        if not rospy.core.is_initialized():
-            rospy.init_node("mjlab_repts_lin_depth_source", anonymous=True, disable_signals=True)
-
         self._cfg = cfg
-        self._rospy = rospy
         self._lock = threading.Lock()
         self._latest_frame: np.ndarray | None = None
         self._latest_recv_time_s: float | None = None
-        self._subscriber = rospy.Subscriber(cfg.ros_topic, Image, self._callback, queue_size=1)
 
     def _callback(self, msg) -> None:
         frame = _ros_image_to_depth_input(
@@ -332,8 +339,82 @@ class RosDepthFrameSource(DepthFrameSource):
                 )
             time.sleep(0.001)
 
+
+class _Ros1SubBackend(_BufferedRosDepthFrameSource):
+    def __init__(self, cfg: DepthSourceConfig):
+        super().__init__(cfg)
+        try:
+            import rospy
+            from sensor_msgs.msg import Image
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "ROS1 depth source requires rospy and sensor_msgs. Source the ROS1 "
+                "workspace before running with depth.source=ros."
+            ) from exc
+
+        if not rospy.core.is_initialized():
+            rospy.init_node("mjlab_repts_lin_depth_source", anonymous=True, disable_signals=True)
+
+        self._subscriber = rospy.Subscriber(cfg.ros_topic, Image, self._callback, queue_size=1)
+
     def close(self) -> None:
         self._subscriber.unregister()
+
+
+class _Ros2SubBackend(_BufferedRosDepthFrameSource):
+    def __init__(self, cfg: DepthSourceConfig):
+        super().__init__(cfg)
+        try:
+            import rclpy
+            from rclpy.qos import qos_profile_sensor_data
+            from sensor_msgs.msg import Image
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "ROS2 depth source requires rclpy and sensor_msgs. Source the ROS2 "
+                "workspace before running with depth.source=ros."
+            ) from exc
+
+        if not rclpy.ok():
+            rclpy.init(args=None)
+
+        self._rclpy = rclpy
+        self._node = rclpy.create_node("mjlab_repts_lin_depth_source")
+        self._subscriber = self._node.create_subscription(
+            Image,
+            cfg.ros_topic,
+            self._callback,
+            qos_profile_sensor_data,
+        )
+        self._spin_thread = threading.Thread(
+            target=rclpy.spin,
+            args=(self._node,),
+            daemon=True,
+        )
+        self._spin_thread.start()
+
+    def close(self) -> None:
+        self._node.destroy_node()
+        if self._spin_thread.is_alive():
+            self._spin_thread.join(timeout=0.1)
+
+
+class RosDepthFrameSource(DepthFrameSource):
+    """ROS sensor_msgs/Image depth source for sim2real deployment."""
+
+    def __init__(self, cfg: DepthSourceConfig):
+        if not cfg.ros_topic:
+            raise ValueError("depth.ros_topic is required when depth.source is 'ros'")
+        ros_type = _resolve_ros_type(cfg.ros_type)
+        if ros_type == "ros1":
+            self._backend = _Ros1SubBackend(cfg)
+        else:
+            self._backend = _Ros2SubBackend(cfg)
+
+    def frame(self) -> np.ndarray:
+        return self._backend.frame()
+
+    def close(self) -> None:
+        self._backend.close()
 
 
 def _ros_image_to_depth_input(
@@ -559,4 +640,5 @@ __all__ = [
     "map_actions_to_sdk_joint_commands",
     "preprocess_depth_image",
     "validate_depth_policy_interface",
+    "_resolve_ros_type",
 ]

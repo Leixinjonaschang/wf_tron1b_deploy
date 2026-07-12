@@ -29,6 +29,7 @@ from mjlab_repts_lin_depth import (  # noqa: E402
     build_proprio_terms,
     preprocess_depth_image,
     validate_depth_policy_interface,
+    _resolve_ros_type,
     _ros_image_to_depth_input,
 )
 
@@ -90,13 +91,36 @@ class FakeRosStamp:
         return 0.0
 
 
+class FakeRos2Time:
+    def to_msg(self):
+        return "ros2-stamp"
+
+
+class FakeRos2Clock:
+    def now(self):
+        return FakeRos2Time()
+
+
 class FakeRosHeader:
     def __init__(self):
         self.stamp = FakeRosStamp()
 
 
+class FakeRos2Header:
+    __slots__ = ("stamp", "frame_id")
+
+    def __init__(self):
+        self.stamp = None
+        self.frame_id = ""
+
+
 class FakeRosImage:
     pass
+
+
+class FakeRos2Image:
+    def __init__(self):
+        self.header = FakeRos2Header()
 
 
 class FakeRotation:
@@ -168,6 +192,136 @@ def _import_wheelfoot_module():
     return _WHEELFOOT_MODULE
 
 
+def _fake_ros1_modules(subscriber_callbacks):
+    class FakeRospy:
+        class core:
+            @staticmethod
+            def is_initialized():
+                return True
+
+        class Time:
+            @staticmethod
+            def now():
+                return None
+
+        @staticmethod
+        def Subscriber(_topic, _image_type, callback, queue_size=1):
+            del _image_type, queue_size
+            subscriber_callbacks.append(callback)
+
+            class FakeSubscriber:
+                def unregister(self):
+                    pass
+
+            return FakeSubscriber()
+
+    sensor_msgs = types.ModuleType("sensor_msgs")
+    sensor_msgs_msg = types.ModuleType("sensor_msgs.msg")
+    sensor_msgs_msg.Image = FakeRosImage
+    rospy_module = types.ModuleType("rospy")
+    rospy_module.core = FakeRospy.core
+    rospy_module.Time = FakeRospy.Time
+    rospy_module.Subscriber = FakeRospy.Subscriber
+    rospy_module.init_node = lambda *args, **kwargs: None
+
+    return {
+        "rospy": rospy_module,
+        "sensor_msgs": sensor_msgs,
+        "sensor_msgs.msg": sensor_msgs_msg,
+    }
+
+
+def _fake_ros2_modules(subscriber_callbacks, state=None, image_type=FakeRosImage):
+    state = state if state is not None else {}
+    qos_module = types.ModuleType("rclpy.qos")
+    qos_module.qos_profile_sensor_data = object()
+
+    class FakeNode:
+        def create_subscription(self, image_cls, topic, callback, qos_profile):
+            state["subscription"] = (image_cls, topic, qos_profile)
+            subscriber_callbacks.append(callback)
+            return object()
+
+        def create_publisher(self, image_cls, topic, qos_profile):
+            state["publisher"] = (image_cls, topic, qos_profile)
+
+            class FakePublisher:
+                def publish(self, msg):
+                    state.setdefault("published", []).append(msg)
+
+            return FakePublisher()
+
+        def get_clock(self):
+            return FakeRos2Clock()
+
+        def destroy_node(self):
+            state["destroyed"] = True
+
+    rclpy_module = types.ModuleType("rclpy")
+    rclpy_module.ok = lambda: state.get("ok", False)
+    rclpy_module.init = lambda args=None: state.setdefault("init_args", args)
+    rclpy_module.create_node = lambda name: state.setdefault("node", FakeNode())
+    rclpy_module.spin = lambda node: state.setdefault("spun_node", node)
+
+    sensor_msgs = types.ModuleType("sensor_msgs")
+    sensor_msgs_msg = types.ModuleType("sensor_msgs.msg")
+    sensor_msgs_msg.Image = image_type
+
+    return {
+        "rclpy": rclpy_module,
+        "rclpy.qos": qos_module,
+        "sensor_msgs": sensor_msgs,
+        "sensor_msgs.msg": sensor_msgs_msg,
+    }
+
+
+def _import_simulator_module(fake_modules):
+    module_path = DEPLOY_ROOT.parent / "pointfoot-mujoco-sim" / "simulator.py"
+    spec = importlib.util.spec_from_file_location(
+        "simulator_ros_depth_test",
+        module_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+
+    mujoco = types.ModuleType("mujoco")
+    viewer = types.ModuleType("mujoco.viewer")
+    mujoco.viewer = viewer
+
+    limxsdk = types.ModuleType("limxsdk")
+    robot = types.ModuleType("limxsdk.robot")
+    rate = types.ModuleType("limxsdk.robot.Rate")
+    robot_module = types.ModuleType("limxsdk.robot.Robot")
+    robot_type = types.ModuleType("limxsdk.robot.RobotType")
+    datatypes = types.ModuleType("limxsdk.datatypes")
+    robot.Rate = rate
+    robot.Robot = robot_module
+    robot.RobotType = robot_type
+    limxsdk.robot = robot
+    limxsdk.datatypes = datatypes
+    datatypes.RobotCmd = FakeRobotCmd
+    datatypes.RobotState = FakeRobotState
+    datatypes.ImuData = FakeImuData
+
+    import_modules = {
+        "mujoco": mujoco,
+        "mujoco.viewer": viewer,
+        "limxsdk": limxsdk,
+        "limxsdk.robot": robot,
+        "limxsdk.robot.Rate": rate,
+        "limxsdk.robot.Robot": robot_module,
+        "limxsdk.robot.RobotType": robot_type,
+        "limxsdk.datatypes": datatypes,
+    }
+    import_modules.update(fake_modules)
+
+    with mock.patch.dict(sys.modules, import_modules):
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+    return module
+
+
 class FakeIo:
     def __init__(self, name, shape):
         self.name = name
@@ -228,6 +382,18 @@ class FakePolicySession:
 
 
 class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
+    def test_resolve_ros_type_prefers_explicit_then_env_then_ros_version(self):
+        with mock.patch.dict(os.environ, {"ROS_TYPE": "ros2", "ROS_VERSION": "1"}, clear=True):
+            self.assertEqual(_resolve_ros_type("ros1"), "ros1")
+            self.assertEqual(_resolve_ros_type(None), "ros2")
+
+        with mock.patch.dict(os.environ, {"ROS_VERSION": "2"}, clear=True):
+            self.assertEqual(_resolve_ros_type(None), "ros2")
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "ROS_TYPE=ros1\\|ros2"):
+                _resolve_ros_type(None)
+
     def test_proprio_obs_slices_match_lin_depth_policy_order(self):
         base_ang_vel = np.array([4.0, 5.0, 6.0], dtype=np.float32)
         projected_gravity = np.array([0.1, -0.2, -0.97], dtype=np.float32)
@@ -319,51 +485,17 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         wheelfoot_module = _import_wheelfoot_module()
         lin_depth = importlib.import_module("mjlab_repts_lin_depth")
         subscriber_callbacks = []
-
-        class FakeRospy:
-            class core:
-                @staticmethod
-                def is_initialized():
-                    return True
-
-            class Time:
-                @staticmethod
-                def now():
-                    return None
-
-            @staticmethod
-            def Subscriber(_topic, _image_type, callback, queue_size=1):
-                del _image_type, queue_size
-                subscriber_callbacks.append(callback)
-
-                class FakeSubscriber:
-                    def unregister(self):
-                        pass
-
-                return FakeSubscriber()
-
         del wheelfoot_module
-        sensor_msgs = types.ModuleType("sensor_msgs")
-        sensor_msgs_msg = types.ModuleType("sensor_msgs.msg")
-        sensor_msgs_msg.Image = FakeRosImage
-        rospy_module = types.ModuleType("rospy")
-        rospy_module.core = FakeRospy.core
-        rospy_module.Time = FakeRospy.Time
-        rospy_module.Subscriber = FakeRospy.Subscriber
-        rospy_module.init_node = lambda *args, **kwargs: None
 
         with mock.patch.dict(
             sys.modules,
-            {
-                "rospy": rospy_module,
-                "sensor_msgs": sensor_msgs,
-                "sensor_msgs.msg": sensor_msgs_msg,
-            },
+            _fake_ros1_modules(subscriber_callbacks),
         ):
             source = lin_depth.create_depth_frame_source(
                 {
                     "source": "ros",
                     "ros_topic": "/camera/depth/image_rect_raw",
+                    "ros_type": "ros1",
                     "timeout_s": 0.01,
                     "max_age_s": 0.01,
                 }
@@ -378,10 +510,88 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         msg.step = 2
         msg.data = np.array([1000], dtype=np.uint16).tobytes()
         subscriber_callbacks[0](msg)
-        source._latest_recv_time_s -= 1.0
+        source._backend._latest_recv_time_s -= 1.0
 
         with self.assertRaisesRegex(TimeoutError, "stale ROS depth image"):
             source.frame()
+
+    def test_ros1_depth_source_subscribes_and_updates_frame(self):
+        lin_depth = importlib.import_module("mjlab_repts_lin_depth")
+        subscriber_callbacks = []
+
+        with mock.patch.dict(sys.modules, _fake_ros1_modules(subscriber_callbacks)):
+            source = lin_depth.create_depth_frame_source(
+                {
+                    "source": "ros",
+                    "ros_topic": "/camera/depth/image_rect_raw",
+                    "ros_type": "ros1",
+                    "timeout_s": 0.01,
+                }
+            )
+
+        msg = FakeRosImage()
+        msg.height = 1
+        msg.width = 1
+        msg.encoding = "16UC1"
+        msg.is_bigendian = 0
+        msg.step = 2
+        msg.data = np.array([1500], dtype=np.uint16).tobytes()
+        subscriber_callbacks[0](msg)
+
+        np.testing.assert_allclose(source.frame()[0, 0, 0, 0], 1.5)
+
+    def test_ros2_depth_source_subscribes_spins_and_updates_frame(self):
+        lin_depth = importlib.import_module("mjlab_repts_lin_depth")
+        subscriber_callbacks = []
+        state = {}
+
+        with mock.patch.dict(sys.modules, _fake_ros2_modules(subscriber_callbacks, state)):
+            source = lin_depth.create_depth_frame_source(
+                {
+                    "source": "ros",
+                    "ros_topic": "/camera/depth/image_rect_raw",
+                    "ros_type": "ros2",
+                    "timeout_s": 0.01,
+                }
+            )
+
+        msg = FakeRosImage()
+        msg.height = 1
+        msg.width = 1
+        msg.encoding = "16UC1"
+        msg.is_bigendian = 0
+        msg.step = 2
+        msg.data = np.array([2500], dtype=np.uint16).tobytes()
+        subscriber_callbacks[0](msg)
+
+        self.assertIs(state["subscription"][0], FakeRosImage)
+        self.assertEqual(state["subscription"][1], "/camera/depth/image_rect_raw")
+        self.assertIs(state["spun_node"], state["node"])
+        np.testing.assert_allclose(source.frame()[0, 0, 0, 0], 2.5)
+        source.close()
+        self.assertTrue(state["destroyed"])
+
+    def test_ros2_depth_publisher_uses_image_wire_format_without_seq(self):
+        state = {}
+        fake_modules = _fake_ros2_modules([], state, image_type=FakeRos2Image)
+
+        with mock.patch.dict(os.environ, {"ROS_TYPE": "ros2"}, clear=False):
+            with mock.patch.dict(sys.modules, fake_modules):
+                simulator = _import_simulator_module(fake_modules)
+                publisher = simulator.RosDepthFramePublisher("/camera/depth/image_rect_raw")
+                publisher.publish(np.array([[1.0, 2.0]], dtype=np.float32))
+
+        msg = state["published"][0]
+        self.assertEqual(state["publisher"][0], FakeRos2Image)
+        self.assertEqual(state["publisher"][1], "/camera/depth/image_rect_raw")
+        self.assertEqual(msg.header.stamp, "ros2-stamp")
+        self.assertFalse(hasattr(msg.header, "seq"))
+        self.assertEqual(msg.encoding, "16UC1")
+        self.assertEqual(msg.is_bigendian, 0)
+        self.assertEqual(msg.height, 1)
+        self.assertEqual(msg.width, 2)
+        self.assertEqual(msg.step, 4)
+        self.assertEqual(msg.data, np.array([1000, 2000], dtype="<u2").tobytes())
 
     def test_validate_depth_policy_interface_accepts_expected_metadata(self):
         validate_depth_policy_interface(

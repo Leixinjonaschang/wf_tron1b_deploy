@@ -16,14 +16,57 @@ import limxsdk.robot.RobotType as RobotType
 import limxsdk.datatypes as datatypes
 
 
-class RosDepthFramePublisher:
+def _resolve_ros_type(explicit=None):
+    value = explicit or os.getenv("ROS_TYPE")
+    if value:
+        normalized = value.strip().lower()
+        if normalized in ("1", "ros1"):
+            return "ros1"
+        if normalized in ("2", "ros2"):
+            return "ros2"
+        raise ValueError("ROS_TYPE must be 'ros1' or 'ros2'")
+
+    ros_version = os.getenv("ROS_VERSION")
+    if ros_version == "1":
+        return "ros1"
+    if ros_version == "2":
+        return "ros2"
+
+    raise RuntimeError(
+        "ROS depth publishing requires ROS_TYPE=ros1|ros2, or a sourced ROS "
+        "environment with ROS_VERSION=1|2."
+    )
+
+
+class _RosDepthMessageMixin:
+    def _depth_to_msg(self, depth_m):
+        import numpy as np
+
+        depth_mm = np.clip(
+            np.nan_to_num(depth_m, nan=0.0, posinf=65.535, neginf=0.0) * 1000.0,
+            0,
+            65535,
+        ).astype("<u2")
+        depth_mm = np.ascontiguousarray(depth_mm)
+
+        msg = self._Image()
+        msg.header.frame_id = self._frame_id
+        msg.height, msg.width = depth_mm.shape
+        msg.encoding = "16UC1"
+        msg.is_bigendian = 0
+        msg.step = msg.width * 2
+        msg.data = depth_mm.tobytes()
+        return msg
+
+
+class _Ros1DepthFramePublisher(_RosDepthMessageMixin):
     def __init__(self, topic, frame_id="camera_depth_optical_frame"):
         try:
             import rospy
             from sensor_msgs.msg import Image
         except ModuleNotFoundError as exc:
             raise RuntimeError(
-                "ROS depth publishing requires rospy and sensor_msgs. Source the ROS "
+                "ROS1 depth publishing requires rospy and sensor_msgs. Source the ROS1 "
                 "workspace before running with MJLAB_DEPTH_SINK=ros."
             ) from exc
 
@@ -37,26 +80,50 @@ class RosDepthFramePublisher:
         self._seq = 0
 
     def publish(self, depth_m):
-        import numpy as np
-
-        depth_mm = np.clip(
-            np.nan_to_num(depth_m, nan=0.0, posinf=65.535, neginf=0.0) * 1000.0,
-            0,
-            65535,
-        ).astype("<u2")
-        depth_mm = np.ascontiguousarray(depth_mm)
-
-        msg = self._Image()
+        msg = self._depth_to_msg(depth_m)
         msg.header.stamp = self._rospy.Time.now()
         msg.header.seq = self._seq
-        msg.header.frame_id = self._frame_id
-        msg.height, msg.width = depth_mm.shape
-        msg.encoding = "16UC1"
-        msg.is_bigendian = 0
-        msg.step = msg.width * 2
-        msg.data = depth_mm.tobytes()
         self._pub.publish(msg)
         self._seq += 1
+
+
+class _Ros2DepthFramePublisher(_RosDepthMessageMixin):
+    def __init__(self, topic, frame_id="camera_depth_optical_frame"):
+        try:
+            import rclpy
+            from rclpy.qos import qos_profile_sensor_data
+            from sensor_msgs.msg import Image
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "ROS2 depth publishing requires rclpy and sensor_msgs. Source the ROS2 "
+                "workspace before running with MJLAB_DEPTH_SINK=ros."
+            ) from exc
+
+        if not rclpy.ok():
+            rclpy.init(args=None)
+
+        self._rclpy = rclpy
+        self._Image = Image
+        self._node = rclpy.create_node("mujoco_depth_publisher")
+        self._pub = self._node.create_publisher(Image, topic, qos_profile_sensor_data)
+        self._frame_id = frame_id
+
+    def publish(self, depth_m):
+        msg = self._depth_to_msg(depth_m)
+        msg.header.stamp = self._node.get_clock().now().to_msg()
+        self._pub.publish(msg)
+
+
+class RosDepthFramePublisher:
+    def __init__(self, topic, frame_id="camera_depth_optical_frame"):
+        ros_type = _resolve_ros_type()
+        if ros_type == "ros1":
+            self._backend = _Ros1DepthFramePublisher(topic, frame_id=frame_id)
+        else:
+            self._backend = _Ros2DepthFramePublisher(topic, frame_id=frame_id)
+
+    def publish(self, depth_m):
+        self._backend.publish(depth_m)
 
 
 class SimulatorMujoco:

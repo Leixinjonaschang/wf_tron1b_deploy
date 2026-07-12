@@ -27,7 +27,7 @@ usage() {
   cat <<EOF
 Usage:
   ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts ./start_sim2sim.sh
-  ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth ./start_sim2sim.sh
+  ROS_TYPE=ros2 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth ./start_sim2sim.sh
 
 Defaults:
   ROBOT_TYPE=${ROBOT_TYPE}
@@ -109,6 +109,37 @@ uses_npy_depth() {
   [[ "${MJLAB_DEPTH_SOURCE:-}" == "npy" || "${MJLAB_DEPTH_SOURCE:-}" == "npy_live" || "${MJLAB_DEPTH_SINK:-}" == "npy" || "${MJLAB_DEPTH_SINK:-}" == "both" ]]
 }
 
+resolve_ros_type() {
+  local value="${ROS_TYPE:-}"
+  if [[ -n "${value}" ]]; then
+    case "${value}" in
+      1|ros1) echo "ros1"; return ;;
+      2|ros2) echo "ros2"; return ;;
+      *)
+        echo "ROS_TYPE must be ros1 or ros2, got '${value}'." >&2
+        exit 1
+        ;;
+    esac
+  fi
+
+  case "${ROS_VERSION:-}" in
+    1) echo "ros1" ;;
+    2) echo "ros2" ;;
+    *)
+      cat >&2 <<EOF
+ROS depth requires ROS_TYPE=ros1|ros2, or a sourced ROS environment that sets ROS_VERSION=1|2.
+For ROS2 Humble:
+  source /opt/ros/humble/setup.bash
+  ROS_TYPE=ros2 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth ./start_sim2sim.sh
+
+For the legacy file-based fallback, set:
+  MJLAB_DEPTH_SOURCE=npy_live MJLAB_DEPTH_SINK=npy
+EOF
+      exit 1
+      ;;
+  esac
+}
+
 ensure_ros_master() {
   if ! command -v rostopic >/dev/null 2>&1; then
     echo "Missing rostopic. Source a ROS1 environment before running ROS depth." >&2
@@ -135,18 +166,69 @@ ensure_ros_master() {
   exit 1
 }
 
+ensure_ros2_cli() {
+  if ! command -v ros2 >/dev/null 2>&1; then
+    echo "Missing ros2. Source a ROS2 environment before running ROS2 depth." >&2
+    exit 1
+  fi
+}
+
 ensure_python_ros_modules() {
-  if ! "${PYTHON_CMD[@]}" -c 'import rospy; import sensor_msgs.msg' >/dev/null 2>&1; then
-    cat >&2 <<EOF
+  case "${ROS_TYPE}" in
+    ros1)
+      if ! "${PYTHON_CMD[@]}" -c 'import rospy; import sensor_msgs.msg' >/dev/null 2>&1; then
+        cat >&2 <<EOF
 The selected Python cannot import rospy and sensor_msgs.
 Source ROS1 and run with a Python that can see ROS packages, for example:
   source /opt/ros/noetic/setup.bash
-  PYTHON=python3 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth ./start_sim2sim.sh
+  PYTHON=python3 ROS_TYPE=ros1 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth ./start_sim2sim.sh
 
 For the legacy file-based fallback, set:
   MJLAB_DEPTH_SOURCE=npy_live MJLAB_DEPTH_SINK=npy
 EOF
-    exit 1
+        exit 1
+      fi
+      ;;
+    ros2)
+      if ! "${PYTHON_CMD[@]}" -c 'import rclpy; import sensor_msgs.msg' >/dev/null 2>&1; then
+        cat >&2 <<EOF
+The selected Python cannot import rclpy and sensor_msgs.
+For ROS2 Humble, create the venv with system site packages, for example:
+  source /opt/ros/humble/setup.bash
+  uv venv --python /usr/bin/python3 --system-site-packages .venv
+  uv export --frozen --no-hashes -o /tmp/wf_tron1b_requirements.txt
+  uv pip sync /tmp/wf_tron1b_requirements.txt
+  PYTHON=${SCRIPT_DIR}/.venv/bin/python ROS_TYPE=ros2 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth ./start_sim2sim.sh
+
+For the legacy file-based fallback, set:
+  MJLAB_DEPTH_SOURCE=npy_live MJLAB_DEPTH_SINK=npy
+EOF
+        exit 1
+      fi
+      ;;
+    *)
+      echo "Internal error: ROS_TYPE must be resolved before checking Python ROS modules." >&2
+      exit 1
+      ;;
+  esac
+}
+
+ensure_ros_runtime() {
+  case "${ROS_TYPE}" in
+    ros1) ensure_ros_master ;;
+    ros2) ensure_ros2_cli ;;
+    *)
+      echo "Internal error: ROS_TYPE must be ros1 or ros2." >&2
+      exit 1
+      ;;
+  esac
+}
+
+configure_ros_depth() {
+  if uses_ros_depth; then
+    local resolved_ros_type
+    resolved_ros_type="$(resolve_ros_type)" || exit 1
+    export ROS_TYPE="${resolved_ros_type}"
   fi
 }
 
@@ -179,13 +261,14 @@ if [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]]; then
   if uses_npy_depth; then
     export MJLAB_DEPTH_NPY_PATH="${MJLAB_DEPTH_NPY_PATH:-${DEPTH_FRAME_PATH}}"
   fi
+  configure_ros_depth
 fi
 
 trap cleanup EXIT INT TERM
 
 if uses_ros_depth; then
   ensure_python_ros_modules
-  ensure_ros_master
+  ensure_ros_runtime
 fi
 
 echo "ROBOT_TYPE=${ROBOT_TYPE}"
@@ -195,6 +278,9 @@ echo "SIM_START_DELAY=${SIM_START_DELAY}"
 echo "CTRL_START_DELAY=${CTRL_START_DELAY}"
 echo "PYTHON_CMD=${PYTHON_CMD[*]}"
 if [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]]; then
+  echo "ROS_TYPE=${ROS_TYPE:-}"
+  echo "ROS_VERSION=${ROS_VERSION:-}"
+  echo "ROS_DISTRO=${ROS_DISTRO:-}"
   echo "MJLAB_DEPTH_SOURCE=${MJLAB_DEPTH_SOURCE}"
   echo "MJLAB_DEPTH_SINK=${MJLAB_DEPTH_SINK}"
   echo "MJLAB_DEPTH_ROS_TOPIC=${MJLAB_DEPTH_ROS_TOPIC}"

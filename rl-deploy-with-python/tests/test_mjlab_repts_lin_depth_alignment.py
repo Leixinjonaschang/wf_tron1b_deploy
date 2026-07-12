@@ -29,6 +29,7 @@ from mjlab_repts_lin_depth import (  # noqa: E402
     build_proprio_terms,
     preprocess_depth_image,
     validate_depth_policy_interface,
+    _ros_image_to_depth_input,
 )
 
 
@@ -81,6 +82,20 @@ class FakeSensorJoy:
 
 
 class FakeDiagnosticValue:
+    pass
+
+
+class FakeRosStamp:
+    def to_sec(self):
+        return 0.0
+
+
+class FakeRosHeader:
+    def __init__(self):
+        self.stamp = FakeRosStamp()
+
+
+class FakeRosImage:
     pass
 
 
@@ -279,6 +294,94 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
             depth[0, 0],
             np.array([[0.0, 1.0], [2.0, 10.0]], dtype=np.float32),
         )
+
+    def test_ros_depth_image_respects_step_padding(self):
+        msg = FakeRosImage()
+        msg.height = 2
+        msg.width = 2
+        msg.encoding = "16UC1"
+        msg.is_bigendian = 0
+        msg.step = 6
+        msg.data = np.array(
+            [1000, 2000, 9999, 3000, 4000, 9999],
+            dtype=np.uint16,
+        ).tobytes()
+
+        depth = _ros_image_to_depth_input(msg, min_depth=0.0, max_depth=10.0)
+
+        self.assertEqual(depth.shape, (1, 1, 28, 48))
+        np.testing.assert_allclose(depth[0, 0, 0, 0], 1.0)
+        np.testing.assert_allclose(depth[0, 0, 0, -1], 2.0)
+        np.testing.assert_allclose(depth[0, 0, -1, 0], 3.0)
+        np.testing.assert_allclose(depth[0, 0, -1, -1], 4.0)
+
+    def test_ros_depth_source_rejects_stale_frame(self):
+        wheelfoot_module = _import_wheelfoot_module()
+        lin_depth = importlib.import_module("mjlab_repts_lin_depth")
+        subscriber_callbacks = []
+
+        class FakeRospy:
+            class core:
+                @staticmethod
+                def is_initialized():
+                    return True
+
+            class Time:
+                @staticmethod
+                def now():
+                    return None
+
+            @staticmethod
+            def Subscriber(_topic, _image_type, callback, queue_size=1):
+                del _image_type, queue_size
+                subscriber_callbacks.append(callback)
+
+                class FakeSubscriber:
+                    def unregister(self):
+                        pass
+
+                return FakeSubscriber()
+
+        del wheelfoot_module
+        sensor_msgs = types.ModuleType("sensor_msgs")
+        sensor_msgs_msg = types.ModuleType("sensor_msgs.msg")
+        sensor_msgs_msg.Image = FakeRosImage
+        rospy_module = types.ModuleType("rospy")
+        rospy_module.core = FakeRospy.core
+        rospy_module.Time = FakeRospy.Time
+        rospy_module.Subscriber = FakeRospy.Subscriber
+        rospy_module.init_node = lambda *args, **kwargs: None
+
+        with mock.patch.dict(
+            sys.modules,
+            {
+                "rospy": rospy_module,
+                "sensor_msgs": sensor_msgs,
+                "sensor_msgs.msg": sensor_msgs_msg,
+            },
+        ):
+            source = lin_depth.create_depth_frame_source(
+                {
+                    "source": "ros",
+                    "ros_topic": "/camera/depth/image_rect_raw",
+                    "timeout_s": 0.01,
+                    "max_age_s": 0.01,
+                }
+            )
+
+        msg = FakeRosImage()
+        msg.header = FakeRosHeader()
+        msg.height = 1
+        msg.width = 1
+        msg.encoding = "16UC1"
+        msg.is_bigendian = 0
+        msg.step = 2
+        msg.data = np.array([1000], dtype=np.uint16).tobytes()
+        subscriber_callbacks[0](msg)
+        source._latest_recv_time_s -= 1.0
+
+        with self.assertRaisesRegex(TimeoutError, "stale ROS depth image"):
+            source.frame()
 
     def test_validate_depth_policy_interface_accepts_expected_metadata(self):
         validate_depth_policy_interface(

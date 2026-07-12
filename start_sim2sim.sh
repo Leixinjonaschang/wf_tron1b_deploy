@@ -99,6 +99,57 @@ start_bg() {
   fi
 }
 
+uses_ros_depth() {
+  [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]] || return 1
+  [[ "${MJLAB_DEPTH_SOURCE:-}" == "ros" || "${MJLAB_DEPTH_SINK:-}" == "ros" || "${MJLAB_DEPTH_SINK:-}" == "both" ]]
+}
+
+uses_npy_depth() {
+  [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]] || return 1
+  [[ "${MJLAB_DEPTH_SOURCE:-}" == "npy" || "${MJLAB_DEPTH_SOURCE:-}" == "npy_live" || "${MJLAB_DEPTH_SINK:-}" == "npy" || "${MJLAB_DEPTH_SINK:-}" == "both" ]]
+}
+
+ensure_ros_master() {
+  if ! command -v rostopic >/dev/null 2>&1; then
+    echo "Missing rostopic. Source a ROS1 environment before running ROS depth." >&2
+    exit 1
+  fi
+  if rostopic list >/dev/null 2>&1; then
+    return
+  fi
+  if ! command -v roscore >/dev/null 2>&1; then
+    echo "Missing roscore and no ROS master is reachable." >&2
+    exit 1
+  fi
+
+  start_bg "roscore" "${LOG_DIR}/roscore.log" roscore
+  for _ in {1..20}; do
+    if rostopic list >/dev/null 2>&1; then
+      return
+    fi
+    sleep 0.5
+  done
+
+  echo "roscore did not become ready. Last log lines:" >&2
+  tail -n 40 "${LOG_DIR}/roscore.log" >&2 || true
+  exit 1
+}
+
+ensure_python_ros_modules() {
+  if ! "${PYTHON_CMD[@]}" -c 'import rospy; import sensor_msgs.msg' >/dev/null 2>&1; then
+    cat >&2 <<EOF
+The selected Python cannot import rospy and sensor_msgs.
+Source ROS1 and run with a Python that can see ROS packages, for example:
+  source /opt/ros/noetic/setup.bash
+  PYTHON=python3 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth ./start_sim2sim.sh
+
+For the legacy file-based fallback, set:
+  MJLAB_DEPTH_SOURCE=npy_live MJLAB_DEPTH_SINK=npy
+EOF
+    exit 1
+  fi
+}
+
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
   exit 0
@@ -118,14 +169,24 @@ export ROBOT_TYPE
 export RL_TYPE
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 if [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]]; then
-  export MJLAB_DEPTH_SOURCE="${MJLAB_DEPTH_SOURCE:-npy_live}"
-  export MJLAB_DEPTH_NPY_PATH="${DEPTH_FRAME_PATH}"
+  export MJLAB_DEPTH_SOURCE="${MJLAB_DEPTH_SOURCE:-ros}"
+  export MJLAB_DEPTH_SINK="${MJLAB_DEPTH_SINK:-ros}"
+  export MJLAB_DEPTH_ROS_TOPIC="${MJLAB_DEPTH_ROS_TOPIC:-/camera/depth/image_rect_raw}"
   export MJLAB_DEPTH_CAPTURE_HZ="${MJLAB_DEPTH_CAPTURE_HZ:-25.0}"
   export MJLAB_DEPTH_HEIGHT="${MJLAB_DEPTH_HEIGHT:-28}"
   export MJLAB_DEPTH_WIDTH="${MJLAB_DEPTH_WIDTH:-48}"
+  export MJLAB_DEPTH_MAX_AGE="${MJLAB_DEPTH_MAX_AGE:-0.5}"
+  if uses_npy_depth; then
+    export MJLAB_DEPTH_NPY_PATH="${MJLAB_DEPTH_NPY_PATH:-${DEPTH_FRAME_PATH}}"
+  fi
 fi
 
 trap cleanup EXIT INT TERM
+
+if uses_ros_depth; then
+  ensure_python_ros_modules
+  ensure_ros_master
+fi
 
 echo "ROBOT_TYPE=${ROBOT_TYPE}"
 echo "RL_TYPE=${RL_TYPE}"
@@ -135,7 +196,12 @@ echo "CTRL_START_DELAY=${CTRL_START_DELAY}"
 echo "PYTHON_CMD=${PYTHON_CMD[*]}"
 if [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]]; then
   echo "MJLAB_DEPTH_SOURCE=${MJLAB_DEPTH_SOURCE}"
-  echo "MJLAB_DEPTH_NPY_PATH=${MJLAB_DEPTH_NPY_PATH}"
+  echo "MJLAB_DEPTH_SINK=${MJLAB_DEPTH_SINK}"
+  echo "MJLAB_DEPTH_ROS_TOPIC=${MJLAB_DEPTH_ROS_TOPIC}"
+  echo "MJLAB_DEPTH_MAX_AGE=${MJLAB_DEPTH_MAX_AGE}"
+  if uses_npy_depth; then
+    echo "MJLAB_DEPTH_NPY_PATH=${MJLAB_DEPTH_NPY_PATH}"
+  fi
 fi
 
 start_bg "MuJoCo simulator" "${LOG_DIR}/simulator.log" \

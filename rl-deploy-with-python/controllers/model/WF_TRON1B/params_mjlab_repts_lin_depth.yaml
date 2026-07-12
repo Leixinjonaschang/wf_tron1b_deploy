@@ -57,14 +57,14 @@ PointfootCfg:
       wheel_vel: [-0.05, 0.05]
 
   depth:
-    # sim2sim default. For sim2real set source: ros and configure ros_topic.
-    source: zero
-    ros_topic: null
+    source: ros
+    ros_topic: /camera/depth/image_rect_raw
     encoding: null
     depth_scale: null
     min_depth: 0.0
     max_depth: 10.0
-    timeout_s: 0.2
+    timeout_s: 0.5
+    max_age_s: 0.5
     npy_path: null
 
   size:

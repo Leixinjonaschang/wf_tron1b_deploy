@@ -15,6 +15,50 @@ import limxsdk.robot.Robot as Robot
 import limxsdk.robot.RobotType as RobotType
 import limxsdk.datatypes as datatypes
 
+
+class RosDepthFramePublisher:
+    def __init__(self, topic, frame_id="camera_depth_optical_frame"):
+        try:
+            import rospy
+            from sensor_msgs.msg import Image
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "ROS depth publishing requires rospy and sensor_msgs. Source the ROS "
+                "workspace before running with MJLAB_DEPTH_SINK=ros."
+            ) from exc
+
+        if not rospy.core.is_initialized():
+            rospy.init_node("mujoco_depth_publisher", anonymous=True, disable_signals=True)
+
+        self._rospy = rospy
+        self._Image = Image
+        self._pub = rospy.Publisher(topic, Image, queue_size=1)
+        self._frame_id = frame_id
+        self._seq = 0
+
+    def publish(self, depth_m):
+        import numpy as np
+
+        depth_mm = np.clip(
+            np.nan_to_num(depth_m, nan=0.0, posinf=65.535, neginf=0.0) * 1000.0,
+            0,
+            65535,
+        ).astype("<u2")
+        depth_mm = np.ascontiguousarray(depth_mm)
+
+        msg = self._Image()
+        msg.header.stamp = self._rospy.Time.now()
+        msg.header.seq = self._seq
+        msg.header.frame_id = self._frame_id
+        msg.height, msg.width = depth_mm.shape
+        msg.encoding = "16UC1"
+        msg.is_bigendian = 0
+        msg.step = msg.width * 2
+        msg.data = depth_mm.tobytes()
+        self._pub.publish(msg)
+        self._seq += 1
+
+
 class SimulatorMujoco:
     def __init__(self, asset_path, joint_sensor_names, robot): 
         self.robot = robot
@@ -26,8 +70,14 @@ class SimulatorMujoco:
         self.mujoco_data = mujoco.MjData(self.mujoco_model)
 
         self.depth_export_path = os.getenv("MJLAB_DEPTH_NPY_PATH")
+        self.depth_sink = os.getenv("MJLAB_DEPTH_SINK", "npy").lower()
+        if self.depth_sink not in ("npy", "ros", "both"):
+            raise ValueError("MJLAB_DEPTH_SINK must be one of: npy, ros, both")
         self.depth_renderer = None
         self.depth_scene_option = None
+        self.depth_ros_pub = None
+        self.depth_ros_topic = os.getenv("MJLAB_DEPTH_ROS_TOPIC", "/camera/depth/image_rect_raw")
+        self.depth_ros_frame_id = os.getenv("MJLAB_DEPTH_FRAME_ID", "camera_depth_optical_frame")
         self.depth_camera_name = os.getenv("MJLAB_DEPTH_CAMERA", "d435")
         self.depth_capture_frequency = float(os.getenv("MJLAB_DEPTH_CAPTURE_HZ", "25.0"))
 
@@ -37,8 +87,14 @@ class SimulatorMujoco:
             1,
             round(self.fps / max(self.depth_capture_frequency, 1.0e-6)),
         )
-        if self.depth_export_path:
+        depth_enabled = bool(self.depth_export_path) or self.depth_sink in ("ros", "both")
+        if depth_enabled:
             self._init_depth_export()
+            if self.depth_sink in ("ros", "both"):
+                self.depth_ros_pub = RosDepthFramePublisher(
+                    self.depth_ros_topic,
+                    frame_id=self.depth_ros_frame_id,
+                )
 
         # Launch the MuJoCo viewer in passive mode with custom settings
         self.viewer = viewer.launch_passive(self.mujoco_model, self.mujoco_data, key_callback=self.key_callback, show_left_ui=True, show_right_ui=True)
@@ -84,14 +140,16 @@ class SimulatorMujoco:
         self.depth_scene_option = mujoco.MjvOption()
         self.depth_scene_option.geomgroup[:] = 0
         self.depth_scene_option.geomgroup[:2] = 1
-        Path(self.depth_export_path).parent.mkdir(parents=True, exist_ok=True)
+        if self.depth_export_path and self.depth_sink in ("npy", "both"):
+            Path(self.depth_export_path).parent.mkdir(parents=True, exist_ok=True)
         print(
             f"*** Depth export enabled: camera={self.depth_camera_name}, "
-            f"shape=({height}, {width}), path={self.depth_export_path} ***"
+            f"shape=({height}, {width}), sink={self.depth_sink}, "
+            f"path={self.depth_export_path}, ros_topic={self.depth_ros_topic} ***"
         )
 
     def _export_depth_frame(self):
-        if self.depth_renderer is None or not self.depth_export_path:
+        if self.depth_renderer is None:
             return
         self.depth_renderer.update_scene(
             self.mujoco_data,
@@ -99,13 +157,16 @@ class SimulatorMujoco:
             scene_option=self.depth_scene_option,
         )
         depth = self.depth_renderer.render().astype("float32", copy=False)
-        path = Path(self.depth_export_path)
-        tmp_path = path.with_suffix(path.suffix + ".tmp")
-        with open(tmp_path, "wb") as f:
-            import numpy as np
+        if self.depth_sink in ("npy", "both") and self.depth_export_path:
+            path = Path(self.depth_export_path)
+            tmp_path = path.with_suffix(path.suffix + ".tmp")
+            with open(tmp_path, "wb") as f:
+                import numpy as np
 
-            np.save(f, depth, allow_pickle=False)
-        os.replace(tmp_path, path)
+                np.save(f, depth, allow_pickle=False)
+            os.replace(tmp_path, path)
+        if self.depth_ros_pub is not None:
+            self.depth_ros_pub.publish(depth)
 
     # Callback function for receiving robot command data
     def robotCmdCallback(self, robot_cmd: datatypes.RobotCmd):

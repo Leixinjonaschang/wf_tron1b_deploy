@@ -207,6 +207,7 @@ class DepthSourceConfig:
     min_depth: float = 0.0
     max_depth: float = 10.0
     timeout_s: float = 0.2
+    max_age_s: float = 0.5
     npy_path: str | None = None
 
 
@@ -297,7 +298,7 @@ class RosDepthFrameSource(DepthFrameSource):
         self._rospy = rospy
         self._lock = threading.Lock()
         self._latest_frame: np.ndarray | None = None
-        self._latest_stamp_s: float | None = None
+        self._latest_recv_time_s: float | None = None
         self._subscriber = rospy.Subscriber(cfg.ros_topic, Image, self._callback, queue_size=1)
 
     def _callback(self, msg) -> None:
@@ -308,16 +309,22 @@ class RosDepthFrameSource(DepthFrameSource):
             min_depth=self._cfg.min_depth,
             max_depth=self._cfg.max_depth,
         )
-        stamp = msg.header.stamp.to_sec() if getattr(msg, "header", None) else time.time()
+        recv_time_s = time.time()
         with self._lock:
             self._latest_frame = frame
-            self._latest_stamp_s = stamp
+            self._latest_recv_time_s = recv_time_s
 
     def frame(self) -> np.ndarray:
         deadline = time.time() + max(self._cfg.timeout_s, 0.0)
         while True:
             with self._lock:
                 if self._latest_frame is not None:
+                    age_s = time.time() - (self._latest_recv_time_s or 0.0)
+                    if self._cfg.max_age_s >= 0.0 and age_s > self._cfg.max_age_s:
+                        raise TimeoutError(
+                            f"stale ROS depth image on {self._cfg.ros_topic}: "
+                            f"age {age_s:.3f}s exceeds {self._cfg.max_age_s:.3f}s"
+                        )
                     return self._latest_frame
             if time.time() >= deadline:
                 raise TimeoutError(
@@ -350,13 +357,25 @@ def _ros_image_to_depth_input(
     dtype = np.dtype(dtype_by_encoding[encoding])
     if getattr(msg, "is_bigendian", 0):
         dtype = dtype.newbyteorder(">")
-    image = np.frombuffer(msg.data, dtype=dtype)
-    expected_values = int(msg.height) * int(msg.width)
-    if image.size < expected_values:
+    height = int(msg.height)
+    width = int(msg.width)
+    row_step = int(getattr(msg, "step", 0)) or width * dtype.itemsize
+    min_bytes = height * row_step
+    if len(msg.data) < min_bytes:
         raise ValueError(
-            f"ROS depth image data has {image.size} values, expected at least {expected_values}"
+            f"ROS depth image data has {len(msg.data)} bytes, expected at least {min_bytes}"
         )
-    image = image[:expected_values].reshape(int(msg.height), int(msg.width))
+    if row_step % dtype.itemsize != 0:
+        raise ValueError(
+            f"ROS depth image step {row_step} is not aligned to dtype {dtype}"
+        )
+    row_values = row_step // dtype.itemsize
+    if row_values < width:
+        raise ValueError(
+            f"ROS depth image step {row_step} is too small for width {width} and dtype {dtype}"
+        )
+    image = np.frombuffer(msg.data, dtype=dtype, count=height * row_values)
+    image = image.reshape(height, row_values)[:, :width]
     return preprocess_depth_image(
         image,
         encoding=encoding,
@@ -383,6 +402,7 @@ def create_depth_frame_source(config: dict | None) -> DepthFrameSource:
         ("min_depth", "MJLAB_DEPTH_MIN"),
         ("max_depth", "MJLAB_DEPTH_MAX"),
         ("timeout_s", "MJLAB_DEPTH_TIMEOUT"),
+        ("max_age_s", "MJLAB_DEPTH_MAX_AGE"),
     ):
         value = os.getenv(env_name)
         if value:

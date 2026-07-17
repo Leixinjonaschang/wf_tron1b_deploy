@@ -15,6 +15,7 @@ LIMXSDK_WHL="${LIMXSDK_WHL:-${SIM_DIR}/limxsdk-lowlevel/python3/amd64/limxsdk-3.
 
 SIMULATOR="${SIM_DIR}/simulator.py"
 CONTROLLER="${CTRL_DIR}/main.py"
+DEPTH_VIEWER="${CTRL_DIR}/depth_image_viewer.py"
 JOYSTICK="${SIM_DIR}/robot-joystick/robot-joystick"
 MODEL_XML="${SIM_DIR}/robot-description/pointfoot/${ROBOT_TYPE}/xml/robot.xml"
 POLICY="${CTRL_DIR}/controllers/model/${ROBOT_TYPE}/policy/${RL_TYPE}/policy.onnx"
@@ -27,7 +28,7 @@ usage() {
   cat <<EOF
 Usage:
   ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts ./start_sim2sim.sh
-  ROS_TYPE=ros2 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth ./start_sim2sim.sh
+  ROS_TYPE=ros1 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth ./start_sim2sim.sh
 
 Defaults:
   ROBOT_TYPE=${ROBOT_TYPE}
@@ -38,9 +39,10 @@ Defaults:
   LIMXSDK_WHL=${LIMXSDK_WHL}
 
 Processes started:
-  1. uv run ... python pointfoot-mujoco-sim/simulator.py
-  2. uv run ... python rl-deploy-with-python/main.py
-  3. pointfoot-mujoco-sim/robot-joystick/robot-joystick
+  1. Python pointfoot-mujoco-sim/simulator.py
+  2. Python rl-deploy-with-python/main.py
+  3. Optional Python rl-deploy-with-python/depth_image_viewer.py
+  4. pointfoot-mujoco-sim/robot-joystick/robot-joystick
 EOF
 }
 
@@ -65,6 +67,7 @@ setup_python_cmd() {
     --with scipy
     --with pyyaml
     --with mujoco
+    --with pygame
     --with "${LIMXSDK_WHL}"
     python
   )
@@ -99,6 +102,35 @@ start_bg() {
   fi
 }
 
+try_start_ros_master() {
+  local name="$1"
+  local log_file="$2"
+  shift 2
+
+  echo "Starting ${name}; log: ${log_file}"
+  "$@" >"${log_file}" 2>&1 &
+  local pid=$!
+  for _ in {1..20}; do
+    if rostopic list >/dev/null 2>&1; then
+      PIDS+=("${pid}")
+      return 0
+    fi
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      echo "${name} exited before becoming ready. Last log lines:" >&2
+      tail -n 40 "${log_file}" >&2 || true
+      wait "${pid}" 2>/dev/null || true
+      return 1
+    fi
+    sleep 0.5
+  done
+
+  echo "${name} did not become ready. Last log lines:" >&2
+  tail -n 40 "${log_file}" >&2 || true
+  kill "${pid}" 2>/dev/null || true
+  wait "${pid}" 2>/dev/null || true
+  return 1
+}
+
 uses_ros_depth() {
   [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]] || return 1
   [[ "${MJLAB_DEPTH_SOURCE:-}" == "ros" || "${MJLAB_DEPTH_SINK:-}" == "ros" || "${MJLAB_DEPTH_SINK:-}" == "both" ]]
@@ -109,14 +141,19 @@ uses_npy_depth() {
   [[ "${MJLAB_DEPTH_SOURCE:-}" == "npy" || "${MJLAB_DEPTH_SOURCE:-}" == "npy_live" || "${MJLAB_DEPTH_SINK:-}" == "npy" || "${MJLAB_DEPTH_SINK:-}" == "both" ]]
 }
 
+uses_depth_viewer() {
+  [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]] || return 1
+  [[ "${MJLAB_DEPTH_VIEW:-}" != "0" ]] || return 1
+  [[ "${MJLAB_DEPTH_VIEW:-}" == "1" || -n "${DISPLAY:-}" ]]
+}
+
 resolve_ros_type() {
   local value="${ROS_TYPE:-}"
   if [[ -n "${value}" ]]; then
     case "${value}" in
       1|ros1) echo "ros1"; return ;;
-      2|ros2) echo "ros2"; return ;;
       *)
-        echo "ROS_TYPE must be ros1 or ros2, got '${value}'." >&2
+        echo "ROS_TYPE must be ros1 for depth transport, got '${value}'." >&2
         exit 1
         ;;
     esac
@@ -124,18 +161,12 @@ resolve_ros_type() {
 
   case "${ROS_VERSION:-}" in
     1) echo "ros1" ;;
-    2) echo "ros2" ;;
-    *)
-      cat >&2 <<EOF
-ROS depth requires ROS_TYPE=ros1|ros2, or a sourced ROS environment that sets ROS_VERSION=1|2.
-For ROS2 Humble:
-  source /opt/ros/humble/setup.bash
-  ROS_TYPE=ros2 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth ./start_sim2sim.sh
-
-For the legacy file-based fallback, set:
-  MJLAB_DEPTH_SOURCE=npy_live MJLAB_DEPTH_SINK=npy
-EOF
+    2)
+      echo "ROS depth transport is ROS1-only. Use the provided ROS1 Docker image for sim2sim." >&2
       exit 1
+      ;;
+    *)
+      echo "ros1"
       ;;
   esac
 }
@@ -148,36 +179,30 @@ ensure_ros_master() {
   if rostopic list >/dev/null 2>&1; then
     return
   fi
-  if ! command -v roscore >/dev/null 2>&1; then
-    echo "Missing roscore and no ROS master is reachable." >&2
+
+  if command -v roscore >/dev/null 2>&1; then
+    if try_start_ros_master "roscore" "${LOG_DIR}/roscore.log" roscore; then
+      return
+    fi
+    echo "Falling back to rosmaster --core." >&2
+  else
+    echo "Missing roscore; trying rosmaster --core." >&2
+  fi
+
+  if ! command -v rosmaster >/dev/null 2>&1; then
+    echo "Missing rosmaster and no ROS master is reachable." >&2
     exit 1
   fi
 
-  start_bg "roscore" "${LOG_DIR}/roscore.log" roscore
-  for _ in {1..20}; do
-    if rostopic list >/dev/null 2>&1; then
-      return
-    fi
-    sleep 0.5
-  done
-
-  echo "roscore did not become ready. Last log lines:" >&2
-  tail -n 40 "${LOG_DIR}/roscore.log" >&2 || true
+  if try_start_ros_master "rosmaster" "${LOG_DIR}/rosmaster.log" rosmaster --core; then
+    return
+  fi
   exit 1
 }
 
-ensure_ros2_cli() {
-  if ! command -v ros2 >/dev/null 2>&1; then
-    echo "Missing ros2. Source a ROS2 environment before running ROS2 depth." >&2
-    exit 1
-  fi
-}
-
 ensure_python_ros_modules() {
-  case "${ROS_TYPE}" in
-    ros1)
-      if ! "${PYTHON_CMD[@]}" -c 'import rospy; import sensor_msgs.msg' >/dev/null 2>&1; then
-        cat >&2 <<EOF
+  if ! "${PYTHON_CMD[@]}" -c 'import rospy; import sensor_msgs.msg' >/dev/null 2>&1; then
+    cat >&2 <<EOF
 The selected Python cannot import rospy and sensor_msgs.
 Source ROS1 and run with a Python that can see ROS packages, for example:
   source /opt/ros/noetic/setup.bash
@@ -186,42 +211,12 @@ Source ROS1 and run with a Python that can see ROS packages, for example:
 For the legacy file-based fallback, set:
   MJLAB_DEPTH_SOURCE=npy_live MJLAB_DEPTH_SINK=npy
 EOF
-        exit 1
-      fi
-      ;;
-    ros2)
-      if ! "${PYTHON_CMD[@]}" -c 'import rclpy; import sensor_msgs.msg' >/dev/null 2>&1; then
-        cat >&2 <<EOF
-The selected Python cannot import rclpy and sensor_msgs.
-For ROS2 Humble, create the venv with system site packages, for example:
-  source /opt/ros/humble/setup.bash
-  uv venv --python /usr/bin/python3 --system-site-packages .venv
-  uv export --frozen --no-hashes -o /tmp/wf_tron1b_requirements.txt
-  uv pip sync /tmp/wf_tron1b_requirements.txt
-  PYTHON=${SCRIPT_DIR}/.venv/bin/python ROS_TYPE=ros2 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth ./start_sim2sim.sh
-
-For the legacy file-based fallback, set:
-  MJLAB_DEPTH_SOURCE=npy_live MJLAB_DEPTH_SINK=npy
-EOF
-        exit 1
-      fi
-      ;;
-    *)
-      echo "Internal error: ROS_TYPE must be resolved before checking Python ROS modules." >&2
-      exit 1
-      ;;
-  esac
+    exit 1
+  fi
 }
 
 ensure_ros_runtime() {
-  case "${ROS_TYPE}" in
-    ros1) ensure_ros_master ;;
-    ros2) ensure_ros2_cli ;;
-    *)
-      echo "Internal error: ROS_TYPE must be ros1 or ros2." >&2
-      exit 1
-      ;;
-  esac
+  ensure_ros_master
 }
 
 configure_ros_depth() {
@@ -243,6 +238,9 @@ require_file "${JOYSTICK}" "virtual joystick"
 require_file "${MODEL_XML}" "robot model XML"
 require_file "${POLICY}" "policy"
 require_file "${LIMXSDK_WHL}" "LimX SDK wheel"
+if uses_depth_viewer; then
+  require_file "${DEPTH_VIEWER}" "depth viewer"
+fi
 
 mkdir -p "${LOG_DIR}"
 setup_python_cmd
@@ -251,6 +249,7 @@ export ROBOT_TYPE
 export RL_TYPE
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 if [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]]; then
+  export ROS_TYPE="${ROS_TYPE:-ros1}"
   export MJLAB_DEPTH_SOURCE="${MJLAB_DEPTH_SOURCE:-ros}"
   export MJLAB_DEPTH_SINK="${MJLAB_DEPTH_SINK:-ros}"
   export MJLAB_DEPTH_ROS_TOPIC="${MJLAB_DEPTH_ROS_TOPIC:-/camera/depth/image_rect_raw}"
@@ -285,6 +284,7 @@ if [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]]; then
   echo "MJLAB_DEPTH_SINK=${MJLAB_DEPTH_SINK}"
   echo "MJLAB_DEPTH_ROS_TOPIC=${MJLAB_DEPTH_ROS_TOPIC}"
   echo "MJLAB_DEPTH_MAX_AGE=${MJLAB_DEPTH_MAX_AGE}"
+  echo "MJLAB_DEPTH_VIEW=${MJLAB_DEPTH_VIEW:-auto}"
   if uses_npy_depth; then
     echo "MJLAB_DEPTH_NPY_PATH=${MJLAB_DEPTH_NPY_PATH}"
   fi
@@ -297,6 +297,11 @@ sleep "${SIM_START_DELAY}"
 start_bg "RL controller" "${LOG_DIR}/controller.log" \
   "${PYTHON_CMD[@]}" "${CONTROLLER}" "${ROBOT_IP}"
 sleep "${CTRL_START_DELAY}"
+
+if uses_depth_viewer; then
+  start_bg "depth viewer" "${LOG_DIR}/depth_viewer.log" \
+    "${PYTHON_CMD[@]}" "${DEPTH_VIEWER}"
+fi
 
 echo "Starting virtual joystick in foreground. Press Ctrl-C here to stop everything."
 "${JOYSTICK}"

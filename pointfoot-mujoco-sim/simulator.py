@@ -23,19 +23,16 @@ def _resolve_ros_type(explicit=None):
         if normalized in ("1", "ros1"):
             return "ros1"
         if normalized in ("2", "ros2"):
-            return "ros2"
-        raise ValueError("ROS_TYPE must be 'ros1' or 'ros2'")
+            raise ValueError("ROS depth publishing is ROS1-only; use ROS_TYPE=ros1")
+        raise ValueError("ROS_TYPE must be 'ros1'")
 
     ros_version = os.getenv("ROS_VERSION")
     if ros_version == "1":
         return "ros1"
     if ros_version == "2":
-        return "ros2"
+        raise ValueError("ROS depth publishing is ROS1-only; use a ROS1 environment")
 
-    raise RuntimeError(
-        "ROS depth publishing requires ROS_TYPE=ros1|ros2, or a sourced ROS "
-        "environment with ROS_VERSION=1|2."
-    )
+    return "ros1"
 
 
 class _RosDepthMessageMixin:
@@ -87,40 +84,10 @@ class _Ros1DepthFramePublisher(_RosDepthMessageMixin):
         self._seq += 1
 
 
-class _Ros2DepthFramePublisher(_RosDepthMessageMixin):
-    def __init__(self, topic, frame_id="camera_depth_optical_frame"):
-        try:
-            import rclpy
-            from rclpy.qos import qos_profile_sensor_data
-            from sensor_msgs.msg import Image
-        except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "ROS2 depth publishing requires rclpy and sensor_msgs. Source the ROS2 "
-                "workspace before running with MJLAB_DEPTH_SINK=ros."
-            ) from exc
-
-        if not rclpy.ok():
-            rclpy.init(args=None)
-
-        self._rclpy = rclpy
-        self._Image = Image
-        self._node = rclpy.create_node("mujoco_depth_publisher")
-        self._pub = self._node.create_publisher(Image, topic, qos_profile_sensor_data)
-        self._frame_id = frame_id
-
-    def publish(self, depth_m):
-        msg = self._depth_to_msg(depth_m)
-        msg.header.stamp = self._node.get_clock().now().to_msg()
-        self._pub.publish(msg)
-
-
 class RosDepthFramePublisher:
     def __init__(self, topic, frame_id="camera_depth_optical_frame"):
-        ros_type = _resolve_ros_type()
-        if ros_type == "ros1":
-            self._backend = _Ros1DepthFramePublisher(topic, frame_id=frame_id)
-        else:
-            self._backend = _Ros2DepthFramePublisher(topic, frame_id=frame_id)
+        _resolve_ros_type()
+        self._backend = _Ros1DepthFramePublisher(topic, frame_id=frame_id)
 
     def publish(self, depth_m):
         self._backend.publish(depth_m)
@@ -185,10 +152,23 @@ class SimulatorMujoco:
 
         # Initialize IMU data structure
         self.imu_data = datatypes.ImuData()
+        self.imu_quat_sensor_adr = self._sensor_address("quat")
+        self.imu_gyro_sensor_adr = self._sensor_address("gyro")
+        self.imu_acc_sensor_adr = self._sensor_address("acc")
 
         # Set up callback for receiving robot commands in simulation mode
         self.robotCmdCallbackPartial = partial(self.robotCmdCallback)
         self.robot.subscribeRobotCmdForSim(self.robotCmdCallbackPartial)
+
+    def _sensor_address(self, name):
+        sensor_id = mujoco.mj_name2id(
+            self.mujoco_model,
+            mujoco.mjtObj.mjOBJ_SENSOR,
+            name,
+        )
+        if sensor_id < 0:
+            raise RuntimeError(f"MuJoCo sensor '{name}' not found")
+        return self.mujoco_model.sensor_adr[sensor_id]
 
     def _init_depth_export(self):
         camera_id = mujoco.mj_name2id(
@@ -268,21 +248,18 @@ class SimulatorMujoco:
             self.robot.publishRobotStateForSim(self.robot_state)
 
             # Extract IMU data (orientation, gyro, and acceleration) from simulation
-            imu_quat_id = mujoco.mj_name2id(self.mujoco_model, mujoco.mjtObj.mjOBJ_SENSOR, "quat")
-            self.imu_data.quat[0] = self.mujoco_data.sensordata[self.mujoco_model.sensor_adr[imu_quat_id] + 0]
-            self.imu_data.quat[1] = self.mujoco_data.sensordata[self.mujoco_model.sensor_adr[imu_quat_id] + 1]
-            self.imu_data.quat[2] = self.mujoco_data.sensordata[self.mujoco_model.sensor_adr[imu_quat_id] + 2]
-            self.imu_data.quat[3] = self.mujoco_data.sensordata[self.mujoco_model.sensor_adr[imu_quat_id] + 3]
+            self.imu_data.quat[0] = self.mujoco_data.sensordata[self.imu_quat_sensor_adr + 0]
+            self.imu_data.quat[1] = self.mujoco_data.sensordata[self.imu_quat_sensor_adr + 1]
+            self.imu_data.quat[2] = self.mujoco_data.sensordata[self.imu_quat_sensor_adr + 2]
+            self.imu_data.quat[3] = self.mujoco_data.sensordata[self.imu_quat_sensor_adr + 3]
 
-            imu_gyro_id = mujoco.mj_name2id(self.mujoco_model, mujoco.mjtObj.mjOBJ_SENSOR, "gyro")
-            self.imu_data.gyro[0] = self.mujoco_data.sensordata[self.mujoco_model.sensor_adr[imu_gyro_id] + 0]
-            self.imu_data.gyro[1] = self.mujoco_data.sensordata[self.mujoco_model.sensor_adr[imu_gyro_id] + 1]
-            self.imu_data.gyro[2] = self.mujoco_data.sensordata[self.mujoco_model.sensor_adr[imu_gyro_id] + 2]
+            self.imu_data.gyro[0] = self.mujoco_data.sensordata[self.imu_gyro_sensor_adr + 0]
+            self.imu_data.gyro[1] = self.mujoco_data.sensordata[self.imu_gyro_sensor_adr + 1]
+            self.imu_data.gyro[2] = self.mujoco_data.sensordata[self.imu_gyro_sensor_adr + 2]
 
-            imu_acc_id = mujoco.mj_name2id(self.mujoco_model, mujoco.mjtObj.mjOBJ_SENSOR, "acc")
-            self.imu_data.acc[0] = self.mujoco_data.sensordata[self.mujoco_model.sensor_adr[imu_acc_id] + 0]
-            self.imu_data.acc[1] = self.mujoco_data.sensordata[self.mujoco_model.sensor_adr[imu_acc_id] + 1]
-            self.imu_data.acc[2] = self.mujoco_data.sensordata[self.mujoco_model.sensor_adr[imu_acc_id] + 2]
+            self.imu_data.acc[0] = self.mujoco_data.sensordata[self.imu_acc_sensor_adr + 0]
+            self.imu_data.acc[1] = self.mujoco_data.sensordata[self.imu_acc_sensor_adr + 1]
+            self.imu_data.acc[2] = self.mujoco_data.sensordata[self.imu_acc_sensor_adr + 2]
 
             # Set the timestamp for the current IMU data and publish it
             self.imu_data.stamp = time.time_ns()

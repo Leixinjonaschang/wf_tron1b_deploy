@@ -671,6 +671,7 @@ dependencies = [
     { name = "mujoco" },
     { name = "onnxruntime", version = "1.23.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "onnxruntime", version = "1.27.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pygame" },
     { name = "pyyaml" },
     { name = "scipy" },
 ]
@@ -681,6 +682,7 @@ requires-dist = [
     { name = "mujoco", specifier = "==3.10.0" },
     { name = "onnxruntime", marker = "python_full_version < '3.11'", specifier = "==1.23.2" },
     { name = "onnxruntime", marker = "python_full_version >= '3.11'", specifier = "==1.27.0" },
+    { name = "pygame", specifier = "==2.6.1" },
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "scipy", specifier = ">=1.15,<1.16" },
 ]

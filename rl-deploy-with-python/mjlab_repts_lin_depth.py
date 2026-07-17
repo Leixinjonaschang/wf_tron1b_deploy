@@ -284,19 +284,16 @@ def _resolve_ros_type(explicit: str | None = None) -> str:
         if normalized in ("1", "ros1"):
             return "ros1"
         if normalized in ("2", "ros2"):
-            return "ros2"
-        raise ValueError("ROS_TYPE must be 'ros1' or 'ros2'")
+            raise ValueError("ROS depth is ROS1-only; use ROS_TYPE=ros1")
+        raise ValueError("ROS_TYPE must be 'ros1'")
 
     ros_version = os.getenv("ROS_VERSION")
     if ros_version == "1":
         return "ros1"
     if ros_version == "2":
-        return "ros2"
+        raise ValueError("ROS depth is ROS1-only; use a ROS1 environment")
 
-    raise RuntimeError(
-        "ROS depth requires ROS_TYPE=ros1|ros2, or a sourced ROS environment "
-        "with ROS_VERSION=1|2."
-    )
+    return "ros1"
 
 
 class _BufferedRosDepthFrameSource(DepthFrameSource):
@@ -361,54 +358,14 @@ class _Ros1SubBackend(_BufferedRosDepthFrameSource):
         self._subscriber.unregister()
 
 
-class _Ros2SubBackend(_BufferedRosDepthFrameSource):
-    def __init__(self, cfg: DepthSourceConfig):
-        super().__init__(cfg)
-        try:
-            import rclpy
-            from rclpy.qos import qos_profile_sensor_data
-            from sensor_msgs.msg import Image
-        except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "ROS2 depth source requires rclpy and sensor_msgs. Source the ROS2 "
-                "workspace before running with depth.source=ros."
-            ) from exc
-
-        if not rclpy.ok():
-            rclpy.init(args=None)
-
-        self._rclpy = rclpy
-        self._node = rclpy.create_node("mjlab_repts_lin_depth_source")
-        self._subscriber = self._node.create_subscription(
-            Image,
-            cfg.ros_topic,
-            self._callback,
-            qos_profile_sensor_data,
-        )
-        self._spin_thread = threading.Thread(
-            target=rclpy.spin,
-            args=(self._node,),
-            daemon=True,
-        )
-        self._spin_thread.start()
-
-    def close(self) -> None:
-        self._node.destroy_node()
-        if self._spin_thread.is_alive():
-            self._spin_thread.join(timeout=0.1)
-
-
 class RosDepthFrameSource(DepthFrameSource):
     """ROS sensor_msgs/Image depth source for sim2real deployment."""
 
     def __init__(self, cfg: DepthSourceConfig):
         if not cfg.ros_topic:
             raise ValueError("depth.ros_topic is required when depth.source is 'ros'")
-        ros_type = _resolve_ros_type(cfg.ros_type)
-        if ros_type == "ros1":
-            self._backend = _Ros1SubBackend(cfg)
-        else:
-            self._backend = _Ros2SubBackend(cfg)
+        _resolve_ros_type(cfg.ros_type)
+        self._backend = _Ros1SubBackend(cfg)
 
     def frame(self) -> np.ndarray:
         return self._backend.frame()
@@ -417,13 +374,11 @@ class RosDepthFrameSource(DepthFrameSource):
         self._backend.close()
 
 
-def _ros_image_to_depth_input(
+def ros_image_to_depth_meters(
     msg,
     *,
     encoding_override: str | None = None,
     depth_scale: float | None = None,
-    min_depth: float = 0.0,
-    max_depth: float = 10.0,
 ) -> np.ndarray:
     encoding = encoding_override or msg.encoding
     dtype_by_encoding = {
@@ -457,10 +412,33 @@ def _ros_image_to_depth_input(
         )
     image = np.frombuffer(msg.data, dtype=dtype, count=height * row_values)
     image = image.reshape(height, row_values)[:, :width]
+    if depth_scale is None:
+        if encoding in ("16UC1", "mono16"):
+            depth_scale = 0.001
+        else:
+            depth_scale = 1.0
+    depth = image.astype(np.float32) * np.float32(depth_scale)
+    return np.nan_to_num(depth, nan=0.0, posinf=np.inf, neginf=0.0)
+
+
+def _ros_image_to_depth_input(
+    msg,
+    *,
+    encoding_override: str | None = None,
+    depth_scale: float | None = None,
+    min_depth: float = 0.0,
+    max_depth: float = 10.0,
+) -> np.ndarray:
+    encoding = encoding_override or msg.encoding
+    image = ros_image_to_depth_meters(
+        msg,
+        encoding_override=encoding_override,
+        depth_scale=depth_scale,
+    )
     return preprocess_depth_image(
         image,
-        encoding=encoding,
-        depth_scale=depth_scale,
+        encoding=encoding if depth_scale is None else None,
+        depth_scale=1.0,
         min_depth=min_depth,
         max_depth=max_depth,
     )
@@ -639,6 +617,7 @@ __all__ = [
     "create_depth_frame_source",
     "map_actions_to_sdk_joint_commands",
     "preprocess_depth_image",
+    "ros_image_to_depth_meters",
     "validate_depth_policy_interface",
     "_resolve_ros_type",
 ]

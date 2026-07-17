@@ -12,7 +12,7 @@
 在宿主机执行, 根据 Dockerfile 构建 docker 镜像：
 
 ```bash
-cd /media/phi/641A24011A23CF3C/ubuntu_data/CLX/project/wheeled_legged_proj/wf_tron1b_deploy
+cd wf_tron1b_deploy
 sudo -E IMAGE_NAME=tron_sim2sim:latest scripts/docker_build_ros1.sh
 ```
 

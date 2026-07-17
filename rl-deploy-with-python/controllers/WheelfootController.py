@@ -15,16 +15,22 @@ import limxsdk.datatypes as datatypes
 from mjlab_repts import (
     ACTION_CLIP,
     DEFAULT_OBS_NOISE_RANGES,
+    LIN_PROPRIO_HISTORY_SHAPE,
     POLICY_ACTION_NAMES,
     SDK_JOINT_NAMES,
     STUDENT_HISTORY_SHAPE,
+    LinProprioHistory,
     TermWiseHistory,
     build_actor_obs,
     build_actor_terms,
+    build_lin_proprio_obs,
     clip_actions,
     command_from_joystick_axes,
     map_actions_to_sdk_joint_commands,
+    validate_lin_policy_interface,
     validate_policy_interface,
+    _metadata_float_array,
+    _metadata_list,
 )
 from mjlab_repts_lin_depth import (
     HIDDEN_STATE_SHAPE as LIN_DEPTH_HIDDEN_STATE_SHAPE,
@@ -44,13 +50,20 @@ class WheelfootController:
         self.robot_type = robot_type
         self.rl_type = rl_type
         self.is_mjlab_repts = self.rl_type == "mjlab_repts"
+        self.is_mjlab_repts_lin = self.rl_type == "mjlab_repts_lin"
         self.is_mjlab_repts_lin_depth = self.rl_type == "mjlab_repts_lin_depth"
-        self.is_mjlab_policy = self.is_mjlab_repts or self.is_mjlab_repts_lin_depth
+        self.is_mjlab_policy = (
+            self.is_mjlab_repts
+            or self.is_mjlab_repts_lin
+            or self.is_mjlab_repts_lin_depth
+        )
         self.start_controller = start_controller
 
         # Load configuration and model file paths based on robot type
         if self.is_mjlab_repts_lin_depth:
             config_name = "params_mjlab_repts_lin_depth.yaml"
+        elif self.is_mjlab_repts_lin:
+            config_name = "params_mjlab_repts_lin.yaml"
         elif self.is_mjlab_repts:
             config_name = "params_mjlab_repts.yaml"
         else:
@@ -158,6 +171,22 @@ class WheelfootController:
             self.encoder_output_shapes = []
             return
 
+        if self.is_mjlab_repts_lin:
+            validate_lin_policy_interface(
+                self.policy_input_names,
+                self.policy_input_shapes,
+                self.policy_output_names,
+                self.policy_output_shapes,
+                self.policy_metadata,
+            )
+            self.apply_mjlab_repts_policy_metadata()
+            self.encoder_session = None
+            self.encoder_input_names = []
+            self.encoder_output_names = []
+            self.encoder_input_shapes = []
+            self.encoder_output_shapes = []
+            return
+
         if self.is_mjlab_repts_lin_depth:
             validate_depth_policy_interface(
                 self.policy_input_names,
@@ -182,29 +211,20 @@ class WheelfootController:
         self.encoder_output_shapes = [self.encoder_session.get_outputs()[i].shape for i in range(self.encoder_session.get_outputs().__len__())]
 
     def apply_mjlab_repts_policy_metadata(self):
-        action_target_names = self.policy_metadata.get("action_target_names")
-        action_scale = self.policy_metadata.get("action_scale")
+        action_target_names = _metadata_list(self.policy_metadata, "action_target_names")
+        action_scale = _metadata_float_array(self.policy_metadata, "action_scale")
         if action_target_names is None or action_scale is None:
             return
 
-        action_target_names = [
-            name.strip()
-            for name in action_target_names.split(",")
-            if name.strip()
-        ]
         if action_target_names != list(POLICY_ACTION_NAMES):
             raise ValueError(
-                f"mjlab_repts ONNX metadata action_target_names must be "
+                f"{self.rl_type} ONNX metadata action_target_names must be "
                 f"{list(POLICY_ACTION_NAMES)}, got {action_target_names}"
             )
 
-        action_scale = np.array(
-            [float(value.strip()) for value in action_scale.split(",") if value.strip()],
-            dtype=np.float32,
-        )
         if action_scale.shape != (self.actions_size,):
             raise ValueError(
-                f"mjlab_repts ONNX metadata action_scale must have shape "
+                f"{self.rl_type} ONNX metadata action_scale must have shape "
                 f"({self.actions_size},), got {action_scale.shape}"
             )
 
@@ -240,7 +260,9 @@ class WheelfootController:
         self.loop_frequency = config['PointfootCfg']['loop_frequency']
         self.encoder_input_size = self.obs_history_length * self.observations_size
         self.mjlab_repts_history = TermWiseHistory(self.obs_history_length)
-        if self.is_mjlab_repts_lin_depth:
+        if self.is_mjlab_repts_lin:
+            self.mjlab_repts_history = LinProprioHistory(self.obs_history_length)
+        elif self.is_mjlab_repts_lin_depth:
             self.mjlab_repts_history = LinDepthProprioHistory(self.obs_history_length)
         self.mjlab_repts_diagnostics_printed = False
         self.mjlab_repts_policy_initialized = False
@@ -296,6 +318,8 @@ class WheelfootController:
         self.default_joint_vel = np.zeros(len(self.joint_names))
         if self.is_mjlab_repts:
             self.proprio_history_vector = np.zeros(STUDENT_HISTORY_SHAPE, dtype=np.float32)
+        elif self.is_mjlab_repts_lin:
+            self.proprio_history_vector = np.zeros(LIN_PROPRIO_HISTORY_SHAPE, dtype=np.float32)
         elif self.is_mjlab_repts_lin_depth:
             self.proprio_history_vector = np.zeros(LIN_DEPTH_PROPRIO_HISTORY_SHAPE, dtype=np.float32)
         
@@ -444,7 +468,7 @@ class WheelfootController:
         if self.mjlab_repts_diagnostics_printed:
             return
 
-        tag = "[mjlab_repts_lin_depth]" if self.is_mjlab_repts_lin_depth else "[mjlab_repts]"
+        tag = f"[{self.rl_type}]"
         action_names = LIN_DEPTH_POLICY_ACTION_NAMES if self.is_mjlab_repts_lin_depth else POLICY_ACTION_NAMES
         print(tag, "policy:", self.model_policy)
         print(tag, "inputs:", list(zip(self.policy_input_names, self.policy_input_shapes)))
@@ -455,6 +479,8 @@ class WheelfootController:
         print(tag, "encoder: disabled")
         if self.is_mjlab_repts_lin_depth:
             print(tag, "depth source:", type(self.depth_source).__name__)
+        if self.is_mjlab_repts_lin:
+            print(tag, "predicted lin vel:", self.predicted_lin_vel)
         print(tag, "sim2sim obs noise enabled:", self.mjlab_repts_obs_noise_enabled)
         self.mjlab_repts_diagnostics_printed = True
 
@@ -512,7 +538,11 @@ class WheelfootController:
             noise_ranges=self.mjlab_repts_obs_noise_ranges,
             rng=self.mjlab_repts_obs_noise_rng,
         )
-        self.observations = build_actor_obs(terms)
+        self.observations = (
+            build_lin_proprio_obs(terms)
+            if self.is_mjlab_repts_lin
+            else build_actor_obs(terms)
+        )
         self.proprio_history_vector = self.mjlab_repts_history.update_and_matrix(terms)
     
     def compute_observation(self):
@@ -623,6 +653,20 @@ class WheelfootController:
             }
             output = self.policy_session.run(self.policy_output_names, inputs)
             self.actions = np.array(output).flatten()
+            return
+
+        if self.is_mjlab_repts_lin:
+            proprio_history = self.proprio_history_vector.astype(np.float32).reshape(
+                1, *LIN_PROPRIO_HISTORY_SHAPE
+            )
+            actor_command = self.commands.astype(np.float32).reshape(1, 3)
+            inputs = {
+                self.policy_input_names[0]: proprio_history,
+                self.policy_input_names[1]: actor_command,
+            }
+            output = self.policy_session.run(self.policy_output_names, inputs)
+            self.actions = np.asarray(output[0], dtype=np.float32).reshape(-1)
+            self.predicted_lin_vel = np.asarray(output[1], dtype=np.float32).reshape(-1)
             return
 
         if self.is_mjlab_repts_lin_depth:

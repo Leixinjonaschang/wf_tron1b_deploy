@@ -46,28 +46,6 @@ PointfootCfg:
       dof_vel: 0.05
       wheel_vel: 0.5
 
-  observation_noise:
-    enabled: true
-    seed: null
-    ranges:
-      base_ang_vel: [-0.05, 0.05]
-      projected_gravity: [-0.05, 0.05]
-      joint_pos: [-0.01, 0.01]
-      joint_vel: [-0.05, 0.05]
-      wheel_vel: [-0.05, 0.05]
-
-  depth:
-    source: ros
-    ros_topic: /camera/depth/image_rect_raw
-    ros_type: null
-    encoding: null
-    depth_scale: null
-    min_depth: 0.0
-    max_depth: 10.0
-    timeout_s: 0.5
-    max_age_s: 0.5
-    npy_path: null
-
   size:
     actions_size: 8
     observations_size: 28

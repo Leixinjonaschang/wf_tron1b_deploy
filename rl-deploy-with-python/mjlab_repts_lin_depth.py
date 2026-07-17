@@ -202,11 +202,13 @@ def preprocess_depth_image(
 class DepthSourceConfig:
     source: str = "zero"
     ros_topic: str | None = None
+    ros_type: str | None = None
     encoding: str | None = None
     depth_scale: float | None = None
     min_depth: float = 0.0
     max_depth: float = 10.0
     timeout_s: float = 0.2
+    max_age_s: float = 0.5
     npy_path: str | None = None
 
 
@@ -275,30 +277,33 @@ class NpyLiveDepthFrameSource(DepthFrameSource):
             time.sleep(0.001)
 
 
-class RosDepthFrameSource(DepthFrameSource):
-    """ROS sensor_msgs/Image depth source for sim2real deployment."""
+def _resolve_ros_type(explicit: str | None = None) -> str:
+    value = explicit or os.getenv("ROS_TYPE")
+    if value:
+        normalized = value.strip().lower()
+        if normalized in ("1", "ros1"):
+            return "ros1"
+        if normalized in ("2", "ros2"):
+            raise ValueError("ROS depth is ROS1-only; use ROS_TYPE=ros1")
+        raise ValueError("ROS_TYPE must be 'ros1'")
+
+    ros_version = os.getenv("ROS_VERSION")
+    if ros_version == "1":
+        return "ros1"
+    if ros_version == "2":
+        raise ValueError("ROS depth is ROS1-only; use a ROS1 environment")
+
+    return "ros1"
+
+
+class _BufferedRosDepthFrameSource(DepthFrameSource):
+    """Shared ROS Image buffering and staleness checks."""
 
     def __init__(self, cfg: DepthSourceConfig):
-        if not cfg.ros_topic:
-            raise ValueError("depth.ros_topic is required when depth.source is 'ros'")
-        try:
-            import rospy
-            from sensor_msgs.msg import Image
-        except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "ROS depth source requires rospy and sensor_msgs. Source the ROS "
-                "workspace before running with depth.source=ros."
-            ) from exc
-
-        if not rospy.core.is_initialized():
-            rospy.init_node("mjlab_repts_lin_depth_source", anonymous=True, disable_signals=True)
-
         self._cfg = cfg
-        self._rospy = rospy
         self._lock = threading.Lock()
         self._latest_frame: np.ndarray | None = None
-        self._latest_stamp_s: float | None = None
-        self._subscriber = rospy.Subscriber(cfg.ros_topic, Image, self._callback, queue_size=1)
+        self._latest_recv_time_s: float | None = None
 
     def _callback(self, msg) -> None:
         frame = _ros_image_to_depth_input(
@@ -308,16 +313,22 @@ class RosDepthFrameSource(DepthFrameSource):
             min_depth=self._cfg.min_depth,
             max_depth=self._cfg.max_depth,
         )
-        stamp = msg.header.stamp.to_sec() if getattr(msg, "header", None) else time.time()
+        recv_time_s = time.time()
         with self._lock:
             self._latest_frame = frame
-            self._latest_stamp_s = stamp
+            self._latest_recv_time_s = recv_time_s
 
     def frame(self) -> np.ndarray:
         deadline = time.time() + max(self._cfg.timeout_s, 0.0)
         while True:
             with self._lock:
                 if self._latest_frame is not None:
+                    age_s = time.time() - (self._latest_recv_time_s or 0.0)
+                    if self._cfg.max_age_s >= 0.0 and age_s > self._cfg.max_age_s:
+                        raise TimeoutError(
+                            f"stale ROS depth image on {self._cfg.ros_topic}: "
+                            f"age {age_s:.3f}s exceeds {self._cfg.max_age_s:.3f}s"
+                        )
                     return self._latest_frame
             if time.time() >= deadline:
                 raise TimeoutError(
@@ -325,17 +336,49 @@ class RosDepthFrameSource(DepthFrameSource):
                 )
             time.sleep(0.001)
 
+
+class _Ros1SubBackend(_BufferedRosDepthFrameSource):
+    def __init__(self, cfg: DepthSourceConfig):
+        super().__init__(cfg)
+        try:
+            import rospy
+            from sensor_msgs.msg import Image
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "ROS1 depth source requires rospy and sensor_msgs. Source the ROS1 "
+                "workspace before running with depth.source=ros."
+            ) from exc
+
+        if not rospy.core.is_initialized():
+            rospy.init_node("mjlab_repts_lin_depth_source", anonymous=True, disable_signals=True)
+
+        self._subscriber = rospy.Subscriber(cfg.ros_topic, Image, self._callback, queue_size=1)
+
     def close(self) -> None:
         self._subscriber.unregister()
 
 
-def _ros_image_to_depth_input(
+class RosDepthFrameSource(DepthFrameSource):
+    """ROS sensor_msgs/Image depth source for sim2real deployment."""
+
+    def __init__(self, cfg: DepthSourceConfig):
+        if not cfg.ros_topic:
+            raise ValueError("depth.ros_topic is required when depth.source is 'ros'")
+        _resolve_ros_type(cfg.ros_type)
+        self._backend = _Ros1SubBackend(cfg)
+
+    def frame(self) -> np.ndarray:
+        return self._backend.frame()
+
+    def close(self) -> None:
+        self._backend.close()
+
+
+def ros_image_to_depth_meters(
     msg,
     *,
     encoding_override: str | None = None,
     depth_scale: float | None = None,
-    min_depth: float = 0.0,
-    max_depth: float = 10.0,
 ) -> np.ndarray:
     encoding = encoding_override or msg.encoding
     dtype_by_encoding = {
@@ -350,17 +393,52 @@ def _ros_image_to_depth_input(
     dtype = np.dtype(dtype_by_encoding[encoding])
     if getattr(msg, "is_bigendian", 0):
         dtype = dtype.newbyteorder(">")
-    image = np.frombuffer(msg.data, dtype=dtype)
-    expected_values = int(msg.height) * int(msg.width)
-    if image.size < expected_values:
+    height = int(msg.height)
+    width = int(msg.width)
+    row_step = int(getattr(msg, "step", 0)) or width * dtype.itemsize
+    min_bytes = height * row_step
+    if len(msg.data) < min_bytes:
         raise ValueError(
-            f"ROS depth image data has {image.size} values, expected at least {expected_values}"
+            f"ROS depth image data has {len(msg.data)} bytes, expected at least {min_bytes}"
         )
-    image = image[:expected_values].reshape(int(msg.height), int(msg.width))
+    if row_step % dtype.itemsize != 0:
+        raise ValueError(
+            f"ROS depth image step {row_step} is not aligned to dtype {dtype}"
+        )
+    row_values = row_step // dtype.itemsize
+    if row_values < width:
+        raise ValueError(
+            f"ROS depth image step {row_step} is too small for width {width} and dtype {dtype}"
+        )
+    image = np.frombuffer(msg.data, dtype=dtype, count=height * row_values)
+    image = image.reshape(height, row_values)[:, :width]
+    if depth_scale is None:
+        if encoding in ("16UC1", "mono16"):
+            depth_scale = 0.001
+        else:
+            depth_scale = 1.0
+    depth = image.astype(np.float32) * np.float32(depth_scale)
+    return np.nan_to_num(depth, nan=0.0, posinf=np.inf, neginf=0.0)
+
+
+def _ros_image_to_depth_input(
+    msg,
+    *,
+    encoding_override: str | None = None,
+    depth_scale: float | None = None,
+    min_depth: float = 0.0,
+    max_depth: float = 10.0,
+) -> np.ndarray:
+    encoding = encoding_override or msg.encoding
+    image = ros_image_to_depth_meters(
+        msg,
+        encoding_override=encoding_override,
+        depth_scale=depth_scale,
+    )
     return preprocess_depth_image(
         image,
-        encoding=encoding,
-        depth_scale=depth_scale,
+        encoding=encoding if depth_scale is None else None,
+        depth_scale=1.0,
         min_depth=min_depth,
         max_depth=max_depth,
     )
@@ -383,6 +461,7 @@ def create_depth_frame_source(config: dict | None) -> DepthFrameSource:
         ("min_depth", "MJLAB_DEPTH_MIN"),
         ("max_depth", "MJLAB_DEPTH_MAX"),
         ("timeout_s", "MJLAB_DEPTH_TIMEOUT"),
+        ("max_age_s", "MJLAB_DEPTH_MAX_AGE"),
     ):
         value = os.getenv(env_name)
         if value:
@@ -538,5 +617,7 @@ __all__ = [
     "create_depth_frame_source",
     "map_actions_to_sdk_joint_commands",
     "preprocess_depth_image",
+    "ros_image_to_depth_meters",
     "validate_depth_policy_interface",
+    "_resolve_ros_type",
 ]

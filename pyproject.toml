@@ -1,13 +1,15 @@
 [project]
 name = "wf-tron1b-deploy"
 version = "0.1.0"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.10,<3.14"
 dependencies = [
     "limxsdk==3.4.2",
     "mujoco==3.10.0",
-    "onnxruntime==1.27.0",
+    "onnxruntime==1.23.2; python_version < '3.11'",
+    "onnxruntime==1.27.0; python_version >= '3.11'",
+    "pygame==2.6.1",
     "pyyaml==6.0.3",
-    "scipy==1.16.3",
+    "scipy>=1.15,<1.16",
 ]
 
 [tool.uv.sources]

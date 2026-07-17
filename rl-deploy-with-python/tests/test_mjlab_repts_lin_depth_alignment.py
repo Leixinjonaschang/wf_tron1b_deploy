@@ -28,7 +28,10 @@ from mjlab_repts_lin_depth import (  # noqa: E402
     build_proprio_obs,
     build_proprio_terms,
     preprocess_depth_image,
+    ros_image_to_depth_meters,
     validate_depth_policy_interface,
+    _resolve_ros_type,
+    _ros_image_to_depth_input,
 )
 
 
@@ -82,6 +85,21 @@ class FakeSensorJoy:
 
 class FakeDiagnosticValue:
     pass
+
+
+class FakeRosStamp:
+    def to_sec(self):
+        return 0.0
+
+
+class FakeRosHeader:
+    def __init__(self):
+        self.stamp = FakeRosStamp()
+
+
+class FakeRosImage:
+    def __init__(self):
+        self.header = FakeRosHeader()
 
 
 class FakeRotation:
@@ -153,6 +171,105 @@ def _import_wheelfoot_module():
     return _WHEELFOOT_MODULE
 
 
+def _fake_ros1_modules(subscriber_callbacks, state=None):
+    state = state if state is not None else {"published": []}
+
+    class FakeRospy:
+        class core:
+            @staticmethod
+            def is_initialized():
+                return True
+
+        class Time:
+            @staticmethod
+            def now():
+                return None
+
+        @staticmethod
+        def Subscriber(_topic, _image_type, callback, queue_size=1):
+            del _image_type, queue_size
+            subscriber_callbacks.append(callback)
+
+            class FakeSubscriber:
+                def unregister(self):
+                    pass
+
+            return FakeSubscriber()
+
+        @staticmethod
+        def Publisher(topic, image_type, queue_size=1):
+            state["publisher"] = (image_type, topic, queue_size)
+
+            class FakePublisher:
+                def publish(self, msg):
+                    state["published"].append(msg)
+
+            return FakePublisher()
+
+    sensor_msgs = types.ModuleType("sensor_msgs")
+    sensor_msgs_msg = types.ModuleType("sensor_msgs.msg")
+    sensor_msgs_msg.Image = FakeRosImage
+    rospy_module = types.ModuleType("rospy")
+    rospy_module.core = FakeRospy.core
+    rospy_module.Time = FakeRospy.Time
+    rospy_module.Subscriber = FakeRospy.Subscriber
+    rospy_module.Publisher = FakeRospy.Publisher
+    rospy_module.init_node = lambda *args, **kwargs: None
+
+    return {
+        "rospy": rospy_module,
+        "sensor_msgs": sensor_msgs,
+        "sensor_msgs.msg": sensor_msgs_msg,
+    }
+
+
+def _import_simulator_module(fake_modules):
+    module_path = DEPLOY_ROOT.parent / "pointfoot-mujoco-sim" / "simulator.py"
+    spec = importlib.util.spec_from_file_location(
+        "simulator_ros_depth_test",
+        module_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+
+    mujoco = types.ModuleType("mujoco")
+    viewer = types.ModuleType("mujoco.viewer")
+    mujoco.viewer = viewer
+
+    limxsdk = types.ModuleType("limxsdk")
+    robot = types.ModuleType("limxsdk.robot")
+    rate = types.ModuleType("limxsdk.robot.Rate")
+    robot_module = types.ModuleType("limxsdk.robot.Robot")
+    robot_type = types.ModuleType("limxsdk.robot.RobotType")
+    datatypes = types.ModuleType("limxsdk.datatypes")
+    robot.Rate = rate
+    robot.Robot = robot_module
+    robot.RobotType = robot_type
+    limxsdk.robot = robot
+    limxsdk.datatypes = datatypes
+    datatypes.RobotCmd = FakeRobotCmd
+    datatypes.RobotState = FakeRobotState
+    datatypes.ImuData = FakeImuData
+
+    import_modules = {
+        "mujoco": mujoco,
+        "mujoco.viewer": viewer,
+        "limxsdk": limxsdk,
+        "limxsdk.robot": robot,
+        "limxsdk.robot.Rate": rate,
+        "limxsdk.robot.Robot": robot_module,
+        "limxsdk.robot.RobotType": robot_type,
+        "limxsdk.datatypes": datatypes,
+    }
+    import_modules.update(fake_modules)
+
+    with mock.patch.dict(sys.modules, import_modules):
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+    return module
+
+
 class FakeIo:
     def __init__(self, name, shape):
         self.name = name
@@ -213,6 +330,22 @@ class FakePolicySession:
 
 
 class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
+    def test_resolve_ros_type_accepts_only_ros1(self):
+        with mock.patch.dict(os.environ, {"ROS_TYPE": "ros1", "ROS_VERSION": "1"}, clear=True):
+            self.assertEqual(_resolve_ros_type("ros1"), "ros1")
+            self.assertEqual(_resolve_ros_type(None), "ros1")
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(_resolve_ros_type(None), "ros1")
+
+        with mock.patch.dict(os.environ, {"ROS_TYPE": "ros2"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "ROS1-only"):
+                _resolve_ros_type(None)
+
+        with mock.patch.dict(os.environ, {"ROS_VERSION": "2"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "ROS1-only"):
+                _resolve_ros_type(None)
+
     def test_proprio_obs_slices_match_lin_depth_policy_order(self):
         base_ang_vel = np.array([4.0, 5.0, 6.0], dtype=np.float32)
         projected_gravity = np.array([0.1, -0.2, -0.97], dtype=np.float32)
@@ -279,6 +412,140 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
             depth[0, 0],
             np.array([[0.0, 1.0], [2.0, 10.0]], dtype=np.float32),
         )
+
+    def test_ros_depth_image_respects_step_padding(self):
+        msg = FakeRosImage()
+        msg.height = 2
+        msg.width = 2
+        msg.encoding = "16UC1"
+        msg.is_bigendian = 0
+        msg.step = 6
+        msg.data = np.array(
+            [1000, 2000, 9999, 3000, 4000, 9999],
+            dtype=np.uint16,
+        ).tobytes()
+
+        depth = _ros_image_to_depth_input(msg, min_depth=0.0, max_depth=10.0)
+
+        self.assertEqual(depth.shape, (1, 1, 28, 48))
+        np.testing.assert_allclose(depth[0, 0, 0, 0], 1.0)
+        np.testing.assert_allclose(depth[0, 0, 0, -1], 2.0)
+        np.testing.assert_allclose(depth[0, 0, -1, 0], 3.0)
+        np.testing.assert_allclose(depth[0, 0, -1, -1], 4.0)
+
+    def test_ros_image_to_depth_meters_keeps_raw_shape(self):
+        msg = FakeRosImage()
+        msg.height = 2
+        msg.width = 2
+        msg.encoding = "16UC1"
+        msg.is_bigendian = 0
+        msg.step = 6
+        msg.data = np.array(
+            [1000, 2000, 9999, 3000, 4000, 9999],
+            dtype=np.uint16,
+        ).tobytes()
+
+        depth_m = ros_image_to_depth_meters(msg)
+
+        self.assertEqual(depth_m.shape, (2, 2))
+        np.testing.assert_allclose(
+            depth_m,
+            np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+        )
+
+    def test_ros_image_to_depth_meters_keeps_32fc1_meters(self):
+        msg = FakeRosImage()
+        msg.height = 1
+        msg.width = 2
+        msg.encoding = "32FC1"
+        msg.is_bigendian = 0
+        msg.step = 8
+        msg.data = np.array([1.25, 2.5], dtype=np.float32).tobytes()
+
+        depth_m = ros_image_to_depth_meters(msg)
+
+        self.assertEqual(depth_m.shape, (1, 2))
+        np.testing.assert_allclose(depth_m, np.array([[1.25, 2.5]], dtype=np.float32))
+
+    def test_ros_depth_source_rejects_stale_frame(self):
+        wheelfoot_module = _import_wheelfoot_module()
+        lin_depth = importlib.import_module("mjlab_repts_lin_depth")
+        subscriber_callbacks = []
+        del wheelfoot_module
+
+        with mock.patch.dict(
+            sys.modules,
+            _fake_ros1_modules(subscriber_callbacks),
+        ):
+            source = lin_depth.create_depth_frame_source(
+                {
+                    "source": "ros",
+                    "ros_topic": "/camera/depth/image_rect_raw",
+                    "ros_type": "ros1",
+                    "timeout_s": 0.01,
+                    "max_age_s": 0.01,
+                }
+            )
+
+        msg = FakeRosImage()
+        msg.header = FakeRosHeader()
+        msg.height = 1
+        msg.width = 1
+        msg.encoding = "16UC1"
+        msg.is_bigendian = 0
+        msg.step = 2
+        msg.data = np.array([1000], dtype=np.uint16).tobytes()
+        subscriber_callbacks[0](msg)
+        source._backend._latest_recv_time_s -= 1.0
+
+        with self.assertRaisesRegex(TimeoutError, "stale ROS depth image"):
+            source.frame()
+
+    def test_ros1_depth_source_subscribes_and_updates_frame(self):
+        lin_depth = importlib.import_module("mjlab_repts_lin_depth")
+        subscriber_callbacks = []
+
+        with mock.patch.dict(sys.modules, _fake_ros1_modules(subscriber_callbacks)):
+            source = lin_depth.create_depth_frame_source(
+                {
+                    "source": "ros",
+                    "ros_topic": "/camera/depth/image_rect_raw",
+                    "ros_type": "ros1",
+                    "timeout_s": 0.01,
+                }
+            )
+
+        msg = FakeRosImage()
+        msg.height = 1
+        msg.width = 1
+        msg.encoding = "16UC1"
+        msg.is_bigendian = 0
+        msg.step = 2
+        msg.data = np.array([1500], dtype=np.uint16).tobytes()
+        subscriber_callbacks[0](msg)
+
+        np.testing.assert_allclose(source.frame()[0, 0, 0, 0], 1.5)
+
+    def test_ros1_depth_publisher_uses_image_wire_format(self):
+        state = {"published": []}
+        fake_modules = _fake_ros1_modules([], state)
+
+        with mock.patch.dict(os.environ, {"ROS_TYPE": "ros1"}, clear=False):
+            with mock.patch.dict(sys.modules, fake_modules):
+                simulator = _import_simulator_module(fake_modules)
+                publisher = simulator.RosDepthFramePublisher("/camera/depth/image_rect_raw")
+                publisher.publish(np.array([[1.0, 2.0]], dtype=np.float32))
+
+        msg = state["published"][0]
+        self.assertEqual(state["publisher"][0], FakeRosImage)
+        self.assertEqual(state["publisher"][1], "/camera/depth/image_rect_raw")
+        self.assertEqual(msg.header.seq, 0)
+        self.assertEqual(msg.encoding, "16UC1")
+        self.assertEqual(msg.is_bigendian, 0)
+        self.assertEqual(msg.height, 1)
+        self.assertEqual(msg.width, 2)
+        self.assertEqual(msg.step, 4)
+        self.assertEqual(msg.data, np.array([1000, 2000], dtype="<u2").tobytes())
 
     def test_validate_depth_policy_interface_accepts_expected_metadata(self):
         validate_depth_policy_interface(

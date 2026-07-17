@@ -59,7 +59,7 @@ MJLAB_DEPTH_VIEW=0 /work/scripts/docker_run_sim2sim_ros1.sh
 
 ## Non-Perceptive Sim-to-Sim Test
 
-用于 non-depth REPTS policy：`mjlab_repts` 或 `mjlab_repts_lin`。
+用于 non-perceptive policy sim2sim：`mjlab_repts` 或 `mjlab_repts_lin`。
 这个流程直接在宿主机 `uv` 环境运行，不需要 ROS。
 
 准备宿主机 Python 环境：
@@ -67,22 +67,31 @@ MJLAB_DEPTH_VIEW=0 /work/scripts/docker_run_sim2sim_ros1.sh
 ```bash
 uv sync
 ```
+### Representation TS for Blind Locomotion
 
-
-手动分终端启动：
+两个终端分别启动：
 
 ```bash
-ROBOT_TYPE=WF_TRON1B uv run python pointfoot-mujoco-sim/simulator.py 127.0.0.1
+export ROBOT_TYPE=WF_TRON1B && export RL_TYPE=mjlab_repts && uv run python pointfoot-mujoco-sim/simulator.py 
 ```
 
 ```bash
-ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts uv run python rl-deploy-with-python/main.py 127.0.0.1
+export ROBOT_TYPE=WF_TRON1B && export RL_TYPE=mjlab_repts && uv run python rl-deploy-with-python/main.py 
 ```
 
-或者运行 LinVel variant：
+```bash
+pointfoot-mujoco-sim/robot-joystick/robot-joystick
+```
+
+### Representation TS with Linear Velocity Prediction for Blind Locomotion
+
+运行 LinVel variant：
+```bash
+export ROBOT_TYPE=WF_TRON1B && export RL_TYPE=mjlab_repts_lin && uv run python pointfoot-mujoco-sim/simulator.py 
+```
 
 ```bash
-ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin uv run python rl-deploy-with-python/main.py 127.0.0.1
+export ROBOT_TYPE=WF_TRON1B && export RL_TYPE=mjlab_repts_lin && uv run python rl-deploy-with-python/main.py 
 ```
 
 ```bash

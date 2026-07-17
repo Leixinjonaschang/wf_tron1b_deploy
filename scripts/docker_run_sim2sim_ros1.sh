@@ -11,7 +11,7 @@ set -euo pipefail
 #   docker exec -it tron_deploy bash
 #   /work/scripts/docker_run_sim2sim_ros1.sh
 
-if [[ ! -d /work || ! -f /work/start_sim2sim.sh ]]; then
+if [[ ! -d /work || ! -f /work/scripts/start_sim2sim.sh ]]; then
   echo "This script is intended to run inside the container with the repo mounted at /work." >&2
   exit 1
 fi
@@ -66,4 +66,4 @@ export MJLAB_DEPTH_VIEW_MAX="${MJLAB_DEPTH_VIEW_MAX:-10.0}"
 export MJLAB_DEPTH_VIEW_HZ="${MJLAB_DEPTH_VIEW_HZ:-30.0}"
 export MJLAB_DEPTH_VIEW_COLORMAP="${MJLAB_DEPTH_VIEW_COLORMAP:-turbo}"
 
-exec ./start_sim2sim.sh "$@"
+exec /work/scripts/start_sim2sim.sh "$@"

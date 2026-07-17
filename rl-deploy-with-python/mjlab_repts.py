@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import ast
+
 import numpy as np
 
 
 ACTOR_OBS_SIZE = 31
 HISTORY_LENGTH = 5
 STUDENT_HISTORY_SHAPE = (HISTORY_LENGTH, ACTOR_OBS_SIZE)
+LIN_PROPRIO_OBS_SIZE = 28
+LIN_PROPRIO_HISTORY_SHAPE = (HISTORY_LENGTH, LIN_PROPRIO_OBS_SIZE)
+LIN_COMMAND_SIZE = 3
 ACTION_CLIP = 2.0
 LEG_ACTION_SCALE = 0.5
 WHEEL_ACTION_SCALE = 10.0
@@ -58,6 +63,14 @@ TERM_ORDER = (
     "wheel_vel",
     "actions",
     "command",
+)
+PROPRIO_TERM_ORDER = (
+    "base_ang_vel",
+    "projected_gravity",
+    "joint_pos",
+    "joint_vel",
+    "wheel_vel",
+    "actions",
 )
 TERM_DIMS = {
     "base_ang_vel": 3,
@@ -171,6 +184,17 @@ def build_actor_obs(terms: dict[str, np.ndarray]) -> np.ndarray:
     return obs.astype(np.float32, copy=False)
 
 
+def build_lin_proprio_obs(terms: dict[str, np.ndarray]) -> np.ndarray:
+    obs = np.concatenate(
+        [_vector(name, terms[name], TERM_DIMS[name]) for name in PROPRIO_TERM_ORDER]
+    )
+    if obs.shape != (LIN_PROPRIO_OBS_SIZE,):
+        raise ValueError(
+            f"proprio_obs must have shape ({LIN_PROPRIO_OBS_SIZE},), got {obs.shape}"
+        )
+    return obs.astype(np.float32, copy=False)
+
+
 class TermWiseHistory:
     """Maintains oldest-to-newest student observation history."""
 
@@ -198,6 +222,42 @@ class TermWiseHistory:
         expected_shape = (self.history_length, ACTOR_OBS_SIZE)
         if obs.shape != expected_shape:
             raise ValueError(f"student_history must have shape {expected_shape}, got {obs.shape}")
+        return obs.astype(np.float32, copy=False)
+
+    def update_and_matrix(self, terms: dict[str, np.ndarray]) -> np.ndarray:
+        self.update(terms)
+        return self.matrix()
+
+
+class LinProprioHistory:
+    """Maintains oldest-to-newest LinVel proprioceptive history."""
+
+    def __init__(self, history_length: int = HISTORY_LENGTH):
+        self.history_length = history_length
+        self._frames: list[np.ndarray] | None = None
+
+    def reset(self, terms: dict[str, np.ndarray]) -> None:
+        obs = build_lin_proprio_obs(terms)
+        self._frames = [obs.copy() for _ in range(self.history_length)]
+
+    def update(self, terms: dict[str, np.ndarray]) -> None:
+        if self._frames is None:
+            self.reset(terms)
+            return
+
+        self._frames.pop(0)
+        self._frames.append(build_lin_proprio_obs(terms).copy())
+
+    def matrix(self) -> np.ndarray:
+        if self._frames is None:
+            raise RuntimeError("history has not been initialized")
+
+        obs = np.stack(self._frames, axis=0)
+        expected_shape = (self.history_length, LIN_PROPRIO_OBS_SIZE)
+        if obs.shape != expected_shape:
+            raise ValueError(
+                f"proprio_history must have shape {expected_shape}, got {obs.shape}"
+            )
         return obs.astype(np.float32, copy=False)
 
     def update_and_matrix(self, terms: dict[str, np.ndarray]) -> np.ndarray:
@@ -261,6 +321,18 @@ def _metadata_list(metadata: dict[str, str], key: str) -> list[str] | None:
     value = metadata.get(key)
     if value is None:
         return None
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if not isinstance(value, str):
+        value = str(value)
+    stripped = value.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        try:
+            parsed = ast.literal_eval(stripped)
+        except (SyntaxError, ValueError):
+            parsed = None
+        if isinstance(parsed, (list, tuple)):
+            return [str(item).strip() for item in parsed if str(item).strip()]
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
@@ -358,5 +430,114 @@ def validate_policy_interface(
         ):
             raise ValueError(
                 f"mjlab_repts ONNX metadata action_scale must be "
+                f"{list(POLICY_ACTION_SCALES)}, got {action_scale.tolist()}"
+            )
+
+
+def validate_lin_policy_interface(
+    input_names: list[str],
+    input_shapes: list[list[int]],
+    output_names: list[str],
+    output_shapes: list[list[int]],
+    metadata: dict[str, str] | None = None,
+) -> None:
+    expected_input_names = ["proprio_history", "actor_command"]
+    expected_input_shapes = [[1, HISTORY_LENGTH, LIN_PROPRIO_OBS_SIZE], [1, LIN_COMMAND_SIZE]]
+    expected_output_names = ["actions", "predicted_lin_vel"]
+    expected_output_shapes = [[1, 8], [1, 3]]
+
+    if input_names != expected_input_names:
+        raise ValueError(f"mjlab_repts_lin ONNX inputs must be {expected_input_names}, got {input_names}")
+    if input_shapes != expected_input_shapes:
+        raise ValueError(
+            f"mjlab_repts_lin ONNX input shapes must be {expected_input_shapes}, got {input_shapes}"
+        )
+    if output_names != expected_output_names:
+        raise ValueError(f"mjlab_repts_lin ONNX outputs must be {expected_output_names}, got {output_names}")
+    if output_shapes != expected_output_shapes:
+        raise ValueError(
+            f"mjlab_repts_lin ONNX output shapes must be {expected_output_shapes}, got {output_shapes}"
+        )
+
+    if metadata is None:
+        return
+
+    expected_observation_names = list(PROPRIO_TERM_ORDER)
+    for metadata_key in (
+        "observation_names",
+        "student_observation_names",
+    ):
+        observation_names = _metadata_list(metadata, metadata_key)
+        if observation_names is None:
+            continue
+        if observation_names != expected_observation_names:
+            raise ValueError(
+                f"mjlab_repts_lin ONNX metadata {metadata_key} must be "
+                f"{expected_observation_names}, got {observation_names}"
+            )
+
+    command_observation_names = _metadata_list(metadata, "command_observation_names")
+    if command_observation_names is not None and command_observation_names != ["command"]:
+        raise ValueError(
+            "mjlab_repts_lin ONNX metadata command_observation_names must be "
+            f"['command'], got {command_observation_names}"
+        )
+
+    policy_input_names = _metadata_list(metadata, "policy_input_names")
+    if policy_input_names is not None and policy_input_names != expected_input_names:
+        raise ValueError(
+            f"mjlab_repts_lin ONNX metadata policy_input_names must be "
+            f"{expected_input_names}, got {policy_input_names}"
+        )
+
+    policy_output_names = _metadata_list(metadata, "policy_output_names")
+    if policy_output_names is not None and policy_output_names != expected_output_names:
+        raise ValueError(
+            f"mjlab_repts_lin ONNX metadata policy_output_names must be "
+            f"{expected_output_names}, got {policy_output_names}"
+        )
+
+    student_history_length = metadata.get("student_history_length")
+    if (
+        student_history_length is not None
+        and int(student_history_length) != HISTORY_LENGTH
+    ):
+        raise ValueError(
+            f"mjlab_repts_lin ONNX metadata student_history_length must be "
+            f"{HISTORY_LENGTH}, got {student_history_length}"
+        )
+
+    flatten_history = metadata.get("student_history_flatten_dim")
+    if flatten_history is not None and flatten_history.lower() != "false":
+        raise ValueError(
+            "mjlab_repts_lin ONNX metadata student_history_flatten_dim must be false, "
+            f"got {flatten_history}"
+        )
+
+    history_order = metadata.get("student_history_order")
+    if history_order is not None and history_order != "oldest_to_newest":
+        raise ValueError(
+            "mjlab_repts_lin ONNX metadata student_history_order must be "
+            f"oldest_to_newest, got {history_order}"
+        )
+
+    action_target_names = _metadata_list(metadata, "action_target_names")
+    if (
+        action_target_names is not None
+        and action_target_names != list(POLICY_ACTION_NAMES)
+    ):
+        raise ValueError(
+            f"mjlab_repts_lin ONNX metadata action_target_names must be "
+            f"{list(POLICY_ACTION_NAMES)}, got {action_target_names}"
+        )
+
+    action_scale = _metadata_float_array(metadata, "action_scale")
+    if action_scale is not None:
+        expected_action_scale = np.asarray(POLICY_ACTION_SCALES, dtype=np.float32)
+        if action_scale.shape != expected_action_scale.shape or not np.allclose(
+            action_scale, expected_action_scale
+        ):
+            raise ValueError(
+                f"mjlab_repts_lin ONNX metadata action_scale must be "
                 f"{list(POLICY_ACTION_SCALES)}, got {action_scale.tolist()}"
             )

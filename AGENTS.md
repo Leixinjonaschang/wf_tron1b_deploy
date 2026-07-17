@@ -25,6 +25,7 @@ This repository packages WF_TRON1B MuJoCo simulation and Python RL deployment as
 - `ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts scripts/start_sim2sim.sh`: launch MuJoCo sim2sim with the default WF_TRON1B policy.
 - `uv run python pointfoot-mujoco-sim/simulator.py 127.0.0.1`: run only the simulator.
 - `ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts uv run python rl-deploy-with-python/main.py 127.0.0.1`: run only the controller.
+- `ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin uv run python rl-deploy-with-python/main.py 127.0.0.1`: run the LinVel REPTS controller variant.
 - `python scripts/depth_image_viewer.py`: run only the ROS/npy depth viewer.
 - `uv run --with pytest pytest rl-deploy-with-python/tests`: run the test suite.
 - `bash -n scripts/start_sim2sim.sh scripts/docker_build_ros1.sh scripts/docker_start_ros1.sh scripts/docker_run_sim2sim_ros1.sh`: validate launcher syntax after shell edits.

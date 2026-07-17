@@ -15,12 +15,12 @@ if __name__ == '__main__':
     # get rl type
     rl_type = os.getenv("RL_TYPE")
     if not rl_type:
-        print("\033[31mError: Please set the RL_TYPE using 'export RL_TYPE=isaacgym/isaaclab/mjlab_repts/mjlab_repts_lin_depth'.\033[0m")
+        print("\033[31mError: Please set the RL_TYPE using 'export RL_TYPE=isaacgym/isaaclab/mjlab_repts/mjlab_repts_lin/mjlab_repts_lin_depth'.\033[0m")
         sys.exit(1)
-    if rl_type not in ("isaacgym", "isaaclab", "mjlab_repts", "mjlab_repts_lin_depth"):
-        print("\033[31mError: RL_TYPE {} is not supported, choose between 'isaacgym', 'isaaclab', 'mjlab_repts', and 'mjlab_repts_lin_depth'.\033[0m".format(rl_type))
+    if rl_type not in ("isaacgym", "isaaclab", "mjlab_repts", "mjlab_repts_lin", "mjlab_repts_lin_depth"):
+        print("\033[31mError: RL_TYPE {} is not supported, choose between 'isaacgym', 'isaaclab', 'mjlab_repts', 'mjlab_repts_lin', and 'mjlab_repts_lin_depth'.\033[0m".format(rl_type))
         sys.exit(1)
-    if rl_type in ("mjlab_repts", "mjlab_repts_lin_depth") and robot_type != "WF_TRON1B":
+    if rl_type in ("mjlab_repts", "mjlab_repts_lin", "mjlab_repts_lin_depth") and robot_type != "WF_TRON1B":
         print("\033[31mError: RL_TYPE {} is only supported for ROBOT_TYPE WF_TRON1B.\033[0m".format(rl_type))
         sys.exit(1)
 

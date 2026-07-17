@@ -59,7 +59,7 @@ MJLAB_DEPTH_VIEW=0 /work/scripts/docker_run_sim2sim_ros1.sh
 
 ## Non-Perceptive Sim-to-Sim Test
 
-用于 non-depth REPTS policy：`mjlab_repts`。
+用于 non-depth REPTS policy：`mjlab_repts` 或 `mjlab_repts_lin`。
 这个流程直接在宿主机 `uv` 环境运行，不需要 ROS。
 
 准备宿主机 Python 环境：
@@ -77,6 +77,12 @@ ROBOT_TYPE=WF_TRON1B uv run python pointfoot-mujoco-sim/simulator.py 127.0.0.1
 
 ```bash
 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts uv run python rl-deploy-with-python/main.py 127.0.0.1
+```
+
+或者运行 LinVel variant：
+
+```bash
+ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin uv run python rl-deploy-with-python/main.py 127.0.0.1
 ```
 
 ```bash

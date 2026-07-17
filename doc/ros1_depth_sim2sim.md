@@ -37,7 +37,7 @@ The helper mounts the repository into `/work`, uses host networking, forwards X1
 
 - MuJoCo simulator with `MJLAB_DEPTH_SINK=ros`
 - Python controller with `MJLAB_DEPTH_SOURCE=ros`
-- ROS1 depth viewer, unless `MJLAB_DEPTH_VIEW=0`
+- ROS1 depth viewer (`scripts/depth_image_viewer.py`), unless `MJLAB_DEPTH_VIEW=0`
 - virtual joystick in the foreground
 
 Useful overrides:

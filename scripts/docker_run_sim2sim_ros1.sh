@@ -1,65 +1,69 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-IMAGE_NAME="${IMAGE_NAME:-tron_sim2sim:latest}"
-CONTAINER_NAME="${CONTAINER_NAME:-tron_deploy}"
+# Run this script inside the already-started ROS1 Docker container.
+# It does not create, rebuild, stop, or remove Docker containers.
+#
+# Host-side container startup is handled by:
+#   scripts/docker_start_ros1.sh
+#
+# Typical container usage:
+#   docker exec -it tron_deploy bash
+#   /work/scripts/docker_run_sim2sim_ros1.sh
 
-if [[ -z "${DISPLAY:-}" ]]; then
-  echo "DISPLAY is not set; this helper runs the interactive MuJoCo/joystick sim2sim path." >&2
+if [[ ! -d /work || ! -f /work/start_sim2sim.sh ]]; then
+  echo "This script is intended to run inside the container with the repo mounted at /work." >&2
   exit 1
 fi
 
-XAUTH_FILE="${XAUTH_FILE:-/tmp/wf_tron1b_docker.xauth}"
-touch "${XAUTH_FILE}"
-if command -v xauth >/dev/null 2>&1; then
-  xauth nlist "${DISPLAY}" 2>/dev/null | sed -e 's/^..../ffff/' | xauth -f "${XAUTH_FILE}" nmerge - 2>/dev/null || true
+cd /work
+
+# The image uses a conda env named "sim". Activate it when available so ROS1,
+# uv, MuJoCo, ONNX Runtime, and LimX SDK all come from the same environment.
+if [[ -f /opt/conda/etc/profile.d/conda.sh ]]; then
+  # shellcheck source=/dev/null
+  source /opt/conda/etc/profile.d/conda.sh
+  set +u
+  conda activate sim
+  set -u
 fi
 
-DOCKER_DEVICES=()
-if [[ -e /dev/dri ]]; then
-  DOCKER_DEVICES=(--device /dev/dri)
-fi
+# Default robot/policy pair for ROS depth sim2sim. Callers can override any of
+# these with environment variables before invoking this script.
+export ROBOT_TYPE="${ROBOT_TYPE:-WF_TRON1B}"
+export RL_TYPE="${RL_TYPE:-mjlab_repts_lin_depth}"
+export ROBOT_IP="${ROBOT_IP:-127.0.0.1}"
+export PYTHON="${PYTHON:-python}"
 
-if docker container inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
-  echo "Replacing existing container: ${CONTAINER_NAME}"
-  docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-  docker rm "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-fi
+# ROS1 depth transport defaults. The simulator publishes sensor_msgs/Image on
+# this topic, and the controller/depth viewer subscribe to the same topic.
+export ROS_TYPE="${ROS_TYPE:-ros1}"
+export MJLAB_DEPTH_SOURCE="${MJLAB_DEPTH_SOURCE:-ros}"
+export MJLAB_DEPTH_SINK="${MJLAB_DEPTH_SINK:-ros}"
+export MJLAB_DEPTH_ROS_TOPIC="${MJLAB_DEPTH_ROS_TOPIC:-/camera/depth/image_rect_raw}"
+export MJLAB_DEPTH_CAPTURE_HZ="${MJLAB_DEPTH_CAPTURE_HZ:-25.0}"
+export MJLAB_DEPTH_HEIGHT="${MJLAB_DEPTH_HEIGHT:-28}"
+export MJLAB_DEPTH_WIDTH="${MJLAB_DEPTH_WIDTH:-48}"
+export MJLAB_DEPTH_MAX_AGE="${MJLAB_DEPTH_MAX_AGE:-0.5}"
+export MJLAB_DEPTH_TIMEOUT="${MJLAB_DEPTH_TIMEOUT:-2.0}"
 
-docker run --rm -it \
-  --name "${CONTAINER_NAME}" \
-  --network host \
-  -e DISPLAY="${DISPLAY}" \
-  -e XAUTHORITY=/tmp/.docker.xauth \
-  -e ROBOT_TYPE="${ROBOT_TYPE:-WF_TRON1B}" \
-  -e RL_TYPE="${RL_TYPE:-mjlab_repts_lin_depth}" \
-  -e PYTHON=python \
-  -e ROS_TYPE=ros1 \
-  -e MJLAB_DEPTH_SOURCE="${MJLAB_DEPTH_SOURCE:-ros}" \
-  -e MJLAB_DEPTH_SINK="${MJLAB_DEPTH_SINK:-ros}" \
-  -e MJLAB_DEPTH_ROS_TOPIC="${MJLAB_DEPTH_ROS_TOPIC:-/camera/depth/image_rect_raw}" \
-  -e MJLAB_DEPTH_TIMEOUT="${MJLAB_DEPTH_TIMEOUT:-2.0}" \
-  -e MJLAB_DEPTH_CAPTURE_HZ="${MJLAB_DEPTH_CAPTURE_HZ:-25.0}" \
-  -e MJLAB_DEPTH_HEIGHT="${MJLAB_DEPTH_HEIGHT:-28}" \
-  -e MJLAB_DEPTH_WIDTH="${MJLAB_DEPTH_WIDTH:-48}" \
-  -e MJLAB_DEPTH_MAX_AGE="${MJLAB_DEPTH_MAX_AGE:-0.5}" \
-  -e MJLAB_DEPTH_NPY_PATH="${MJLAB_DEPTH_NPY_PATH:-/work/logs/sim2sim/depth_frame.npy}" \
-  -e MJLAB_DEPTH_ENCODING="${MJLAB_DEPTH_ENCODING:-}" \
-  -e MJLAB_DEPTH_SCALE="${MJLAB_DEPTH_SCALE:-}" \
-  -e MJLAB_DEPTH_MIN="${MJLAB_DEPTH_MIN:-0.0}" \
-  -e MJLAB_DEPTH_MAX="${MJLAB_DEPTH_MAX:-10.0}" \
-  -e MJLAB_DEPTH_VIEW="${MJLAB_DEPTH_VIEW:-1}" \
-  -e MJLAB_DEPTH_VIEW_SOURCE="${MJLAB_DEPTH_VIEW_SOURCE:-${MJLAB_DEPTH_SOURCE:-ros}}" \
-  -e MJLAB_DEPTH_VIEW_SCALE="${MJLAB_DEPTH_VIEW_SCALE:-10}" \
-  -e MJLAB_DEPTH_VIEW_MIN="${MJLAB_DEPTH_VIEW_MIN:-0.0}" \
-  -e MJLAB_DEPTH_VIEW_MAX="${MJLAB_DEPTH_VIEW_MAX:-10.0}" \
-  -e MJLAB_DEPTH_VIEW_HZ="${MJLAB_DEPTH_VIEW_HZ:-30.0}" \
-  -e MJLAB_DEPTH_VIEW_COLORMAP="${MJLAB_DEPTH_VIEW_COLORMAP:-turbo}" \
-  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
-  -v "${XAUTH_FILE}:/tmp/.docker.xauth:ro" \
-  -v "${REPO_DIR}:/work:rw" \
-  "${DOCKER_DEVICES[@]}" \
-  "${IMAGE_NAME}" \
-  bash -lc 'source /opt/conda/etc/profile.d/conda.sh && conda activate sim && ./start_sim2sim.sh'
+# Keep the legacy file path configured for fallback/debug modes that use npy.
+export MJLAB_DEPTH_NPY_PATH="${MJLAB_DEPTH_NPY_PATH:-/work/logs/sim2sim/depth_frame.npy}"
+
+# Enable the Python depth viewer by default when DISPLAY is available. Set
+# MJLAB_DEPTH_VIEW=0 to run simulator/controller/joystick without the viewer.
+if [[ -z "${MJLAB_DEPTH_VIEW:-}" ]]; then
+  if [[ -n "${DISPLAY:-}" ]]; then
+    export MJLAB_DEPTH_VIEW=1
+  else
+    export MJLAB_DEPTH_VIEW=0
+  fi
+fi
+export MJLAB_DEPTH_VIEW_SOURCE="${MJLAB_DEPTH_VIEW_SOURCE:-${MJLAB_DEPTH_SOURCE}}"
+export MJLAB_DEPTH_VIEW_SCALE="${MJLAB_DEPTH_VIEW_SCALE:-10}"
+export MJLAB_DEPTH_VIEW_MIN="${MJLAB_DEPTH_VIEW_MIN:-0.0}"
+export MJLAB_DEPTH_VIEW_MAX="${MJLAB_DEPTH_VIEW_MAX:-10.0}"
+export MJLAB_DEPTH_VIEW_HZ="${MJLAB_DEPTH_VIEW_HZ:-30.0}"
+export MJLAB_DEPTH_VIEW_COLORMAP="${MJLAB_DEPTH_VIEW_COLORMAP:-turbo}"
+
+exec ./start_sim2sim.sh "$@"

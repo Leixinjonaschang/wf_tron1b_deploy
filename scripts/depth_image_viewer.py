@@ -5,10 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import sys
 import threading
 import time
 
 import numpy as np
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEPLOY_ROOT = REPO_ROOT / "rl-deploy-with-python"
+sys.path.insert(0, str(DEPLOY_ROOT))
 
 from mjlab_repts_lin_depth import _resolve_ros_type, ros_image_to_depth_meters
 

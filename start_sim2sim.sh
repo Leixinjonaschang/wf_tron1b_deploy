@@ -15,7 +15,7 @@ LIMXSDK_WHL="${LIMXSDK_WHL:-${SIM_DIR}/limxsdk-lowlevel/python3/amd64/limxsdk-3.
 
 SIMULATOR="${SIM_DIR}/simulator.py"
 CONTROLLER="${CTRL_DIR}/main.py"
-DEPTH_VIEWER="${CTRL_DIR}/depth_image_viewer.py"
+DEPTH_VIEWER="${SCRIPT_DIR}/scripts/depth_image_viewer.py"
 JOYSTICK="${SIM_DIR}/robot-joystick/robot-joystick"
 MODEL_XML="${SIM_DIR}/robot-description/pointfoot/${ROBOT_TYPE}/xml/robot.xml"
 POLICY="${CTRL_DIR}/controllers/model/${ROBOT_TYPE}/policy/${RL_TYPE}/policy.onnx"
@@ -41,7 +41,7 @@ Defaults:
 Processes started:
   1. Python pointfoot-mujoco-sim/simulator.py
   2. Python rl-deploy-with-python/main.py
-  3. Optional Python rl-deploy-with-python/depth_image_viewer.py
+  3. Optional Python scripts/depth_image_viewer.py
   4. pointfoot-mujoco-sim/robot-joystick/robot-joystick
 EOF
 }

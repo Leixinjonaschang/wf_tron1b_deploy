@@ -9,15 +9,22 @@ import mujoco
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOL_PATH = REPO_ROOT / "utils" / "terrain_tool" / "terrain_generator.py"
-SCENE_PATH = (
+XML_DIR = (
     REPO_ROOT
     / "pointfoot-mujoco-sim"
     / "robot-description"
     / "pointfoot"
     / "WF_TRON1B"
     / "xml"
-    / "scene_terrain.xml"
 )
+ROBOT_XML = XML_DIR / "robot.xml"
+SCENE_EXPECTATIONS = {
+    "scene_stairs.xml": (4, {"box"}),
+    "scene_slope.xml": (1, {"box"}),
+    "scene_rough_ground.xml": (42, {"box"}),
+    "scene_obstacle.xml": (1, {"cylinder"}),
+    "scene_terrain.xml": (48, {"box", "cylinder"}),
+}
 
 
 def _load_generator_module():
@@ -28,10 +35,15 @@ def _load_generator_module():
     return module
 
 
-def _assert_terrain_geoms_are_depth_visible(scene_path: Path) -> None:
+def _terrain_geoms(scene_path: Path):
     root = xml_et.parse(scene_path).getroot()
     geoms = root.findall("./worldbody/geom")
     assert geoms
+    return geoms
+
+
+def _assert_terrain_geoms_are_depth_visible(scene_path: Path) -> None:
+    geoms = _terrain_geoms(scene_path)
     for geo in geoms:
         assert geo.attrib["group"] == "0"
         assert geo.attrib["contype"] == "1"
@@ -40,20 +52,38 @@ def _assert_terrain_geoms_are_depth_visible(scene_path: Path) -> None:
         assert float(geo.attrib["rgba"].split()[3]) == 1.0
 
 
-def test_default_course_generation_stamps_every_terrain_geom(tmp_path):
+def test_all_scene_generation_stamps_every_terrain_geom(tmp_path):
     generator_module = _load_generator_module()
     base_scene = tmp_path / "base_scene.xml"
-    output_scene = tmp_path / "scene_terrain.xml"
     base_scene.write_text("<mujoco><asset/><worldbody/></mujoco>", encoding="utf-8")
 
-    generator = generator_module.TerrainGenerator(base_scene, output_scene)
-    generator_module.add_default_course(generator)
-    generator.Save()
+    generated_scenes = generator_module.generate_all_scenes(base_scene, tmp_path)
 
-    _assert_terrain_geoms_are_depth_visible(output_scene)
+    assert {scene.name for scene in generated_scenes} == set(SCENE_EXPECTATIONS)
+    for output_scene in generated_scenes:
+        expected_count, expected_types = SCENE_EXPECTATIONS[output_scene.name]
+        geoms = _terrain_geoms(output_scene)
+        assert len(geoms) == expected_count
+        assert {geo.attrib["type"] for geo in geoms} == expected_types
+        _assert_terrain_geoms_are_depth_visible(output_scene)
 
 
-def test_committed_terrain_scene_loads_in_mujoco():
-    _assert_terrain_geoms_are_depth_visible(SCENE_PATH)
-    model = mujoco.MjModel.from_xml_path(str(SCENE_PATH))
-    assert model.ngeom > 1
+def test_committed_terrain_scenes_load_in_mujoco():
+    for scene_name, (expected_count, expected_types) in SCENE_EXPECTATIONS.items():
+        scene_path = XML_DIR / scene_name
+        geoms = _terrain_geoms(scene_path)
+        assert len(geoms) == expected_count
+        assert {geo.attrib["type"] for geo in geoms} == expected_types
+        _assert_terrain_geoms_are_depth_visible(scene_path)
+        model = mujoco.MjModel.from_xml_path(str(scene_path))
+        assert model.ngeom > expected_count
+
+
+def test_robot_floor_uses_skeleton_reference_colours():
+    root = xml_et.parse(ROBOT_XML).getroot()
+    texture = next(texture for texture in root.findall("./asset/texture") if texture.attrib.get("name") == "texplane")
+    floor = next(geom for geom in root.findall("./worldbody/geom") if geom.attrib.get("name") == "floor")
+
+    assert texture.attrib["rgb1"] == "1 1 1"
+    assert texture.attrib["rgb2"] == "0.85 0.85 0.85"
+    assert floor.attrib["rgba"] == "1 1 1 1"

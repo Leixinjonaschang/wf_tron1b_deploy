@@ -52,24 +52,26 @@ Run inside the container:
 
 Stop sim2sim with `Ctrl-C` in the terminal running the joystick.
 
-### Run the terrain course
+### Run terrain scenes
 
-Generate the committed WF_TRON1B terrain scene from the repository root when
-you change its course definition:
+Generate the committed WF_TRON1B terrain scenes from the repository root when
+you change their definitions:
 
 ```bash
 uv run python utils/terrain_tool/terrain_generator.py
 ```
 
-Then select it for sim2sim (the default remains the flat `robot.xml` scene):
+Select one scene for sim2sim (the default remains the flat `robot.xml` scene):
 
 ```bash
-MJLAB_SCENE=scene_terrain.xml /work/scripts/docker_run_sim2sim_ros1.sh
+MJLAB_SCENE=scene_stairs.xml /work/scripts/docker_run_sim2sim_ros1.sh
 ```
 
-The course is placed in front of the D435 camera along `+x` and contains low
-stairs, a slope, rough ground, and an offset cylinder. Its geoms use MuJoCo
-group 0, so they are included in the depth renderer. Perlin/image height-field
+Available scene files are `scene_stairs.xml`, `scene_slope.xml`,
+`scene_rough_ground.xml`, and `scene_obstacle.xml`; each contains only its
+named terrain. `scene_terrain.xml` remains available as the combined course.
+All terrain is placed in front of the D435 camera along `+x` and uses MuJoCo
+group 0, so it is included in the depth renderer. Perlin/image height-field
 helpers are optional and require `pip install noise opencv-python` when used.
 
 Logs are written to:

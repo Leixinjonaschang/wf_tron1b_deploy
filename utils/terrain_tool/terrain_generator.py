@@ -301,23 +301,35 @@ class TerrainGenerator:
         self.scene.write(self.output_scene_path, encoding="utf-8", xml_declaration=True)
 
 
-def add_default_course(generator: TerrainGenerator) -> None:
-    """Build the deterministic, easy-to-hard course in the D435 +x view."""
+def add_stairs_course(generator: TerrainGenerator) -> None:
+    """Build the low-stairs scene in the D435 +x view."""
     generator.AddStairs(
         init_pos=[1.2, 0.0, 0.0], width=0.20, height=0.05, length=1.20, stair_nums=4
     )
+
+
+def add_slope_course(generator: TerrainGenerator) -> None:
+    """Build the gentle-slope scene in the D435 +x view."""
     generator.AddBox(
         position=[3.2, 0.0, 0.10], euler=[0.0, -0.12, 0.0], size=[1.20, 1.50, 0.04]
     )
+
+
+def add_rough_ground_course(generator: TerrainGenerator) -> None:
+    """Build the deterministic rough-ground scene in the D435 +x view."""
     generator.AddRoughGround(
-        init_pos=[5.0, -0.84, 0.0],
+        init_pos=[5.0, -0.84, 0.1],
         nums=[7, 6],
-        box_size=[0.25, 0.25, 0.10],
+        box_size=[0.25, 0.25, 0.1],
         box_size_rand=[0.04, 0.04, 0.04],
         box_euler_rand=[0.04, 0.04, 0.03],
         separation=[0.28, 0.28],
         separation_rand=[0.01, 0.01],
     )
+
+
+def add_obstacle_course(generator: TerrainGenerator) -> None:
+    """Build the offset-cylinder scene in the D435 +x view."""
     generator.AddGeometry(
         position=[7.6, 0.30, 0.40],
         euler=[0.0, 0.0, 0.0],
@@ -326,8 +338,39 @@ def add_default_course(generator: TerrainGenerator) -> None:
     )
 
 
+def add_default_course(generator: TerrainGenerator) -> None:
+    """Build the combined easy-to-hard terrain course."""
+    add_stairs_course(generator)
+    add_slope_course(generator)
+    add_rough_ground_course(generator)
+    add_obstacle_course(generator)
+
+
+SCENE_BUILDERS = {
+    "scene_stairs.xml": add_stairs_course,
+    "scene_slope.xml": add_slope_course,
+    "scene_rough_ground.xml": add_rough_ground_course,
+    "scene_obstacle.xml": add_obstacle_course,
+    "scene_terrain.xml": add_default_course,
+}
+
+
+def generate_all_scenes(
+    input_scene_path: Path | str = INPUT_SCENE_PATH,
+    output_dir: Path | str = XML_DIR,
+) -> tuple[Path, ...]:
+    """Generate the four single-terrain scenes and the combined course."""
+    output_dir = Path(output_dir)
+    scene_paths = []
+    for scene_name, build_scene in SCENE_BUILDERS.items():
+        scene_path = output_dir / scene_name
+        generator = TerrainGenerator(input_scene_path, scene_path)
+        build_scene(generator)
+        generator.Save()
+        scene_paths.append(scene_path)
+    return tuple(scene_paths)
+
+
 if __name__ == "__main__":
-    terrain_generator = TerrainGenerator()
-    add_default_course(terrain_generator)
-    terrain_generator.Save()
-    print(f"wrote {OUTPUT_SCENE_PATH}")
+    for generated_scene in generate_all_scenes():
+        print(f"wrote {generated_scene}")

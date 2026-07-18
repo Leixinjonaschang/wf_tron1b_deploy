@@ -57,6 +57,39 @@ MJLAB_DEPTH_VIEW=0 /work/scripts/docker_run_sim2sim_ros1.sh
 
 更多细节见：`doc/ros1_depth_sim2sim.md`。
 
+## Terrain Scenes
+
+离线地形工具位于 `utils/terrain_tool/`。修改地形定义后，在仓库根目录生成全部场景：
+
+```bash
+uv run python utils/terrain_tool/terrain_generator.py
+```
+
+生成的场景位于
+`pointfoot-mujoco-sim/robot-description/pointfoot/WF_TRON1B/xml/`：
+
+- `scene_stairs.xml`：低台阶。
+- `scene_slope.xml`：缓坡。
+- `scene_rough_ground.xml`：碎石/不平地。
+- `scene_obstacle.xml`：偏置圆柱障碍物。
+- `scene_terrain.xml`：以上四类地形的组合课程。
+
+用 `MJLAB_SCENE` 选择场景；未设置时仍使用平地 `robot.xml`。例如在 ROS1 Docker 容器内运行碎石场景：
+
+```bash
+MJLAB_SCENE=scene_rough_ground.xml /work/scripts/docker_run_sim2sim_ros1.sh
+```
+
+`scene_rough_ground.xml` 的难度定义在
+`utils/terrain_tool/terrain_generator.py` 的 `add_rough_ground_course()`：
+
+- `init_pos[2]` 与 `box_size[2]` 控制露出高度；当前约为 8–12 cm。
+- `box_size_rand[2]` 控制高度起伏。
+- `box_euler_rand` 控制随机倾角（单位为弧度）。
+- `separation` 控制块间缝隙，`nums` 控制地形覆盖范围。
+
+每次调整后重新运行生成器；它会同步更新独立碎石场景和组合场景。
+
 ## Non-Perceptive Sim-to-Sim Test
 
 用于 non-perceptive policy sim2sim：`mjlab_repts` 或 `mjlab_repts_lin`。

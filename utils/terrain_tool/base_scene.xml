@@ -1,0 +1,5 @@
+<mujoco model="WF_TRON1B_terrain">
+  <include file="robot.xml"/>
+  <asset/>
+  <worldbody/>
+</mujoco>

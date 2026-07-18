@@ -52,6 +52,28 @@ Run inside the container:
 
 Stop sim2sim with `Ctrl-C` in the terminal running the joystick.
 
+### Run terrain scenes
+
+Generate the committed WF_TRON1B terrain scenes from the repository root when
+you change their definitions:
+
+```bash
+uv run python utils/terrain_tool/terrain_generator.py
+```
+
+Select one scene for sim2sim (the default remains the flat `robot.xml` scene):
+
+```bash
+MJLAB_SCENE=scene_stairs.xml /work/scripts/docker_run_sim2sim_ros1.sh
+```
+
+Available scene files are `scene_stairs.xml`, `scene_slope.xml`,
+`scene_rough_ground.xml`, and `scene_obstacle.xml`; each contains only its
+named terrain. `scene_terrain.xml` remains available as the combined course.
+All terrain is placed in front of the D435 camera along `+x` and uses MuJoCo
+group 0, so it is included in the depth renderer. Perlin/image height-field
+helpers are optional and require `pip install noise opencv-python` when used.
+
 Logs are written to:
 
 ```bash

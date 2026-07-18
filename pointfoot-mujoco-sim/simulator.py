@@ -130,10 +130,15 @@ class SimulatorMujoco:
                     frame_id=self.depth_ros_frame_id,
                 )
 
-        # Launch the MuJoCo viewer in passive mode with custom settings
+        # Launch the MuJoCo viewer with the XML's fixed third-person camera.
         self.viewer = viewer.launch_passive(self.mujoco_model, self.mujoco_data, key_callback=self.key_callback, show_left_ui=True, show_right_ui=True)
-        self.viewer.cam.distance = 10  # Set camera distance
-        self.viewer.cam.elevation = -20  # Set camera elevation
+        track_camera_id = mujoco.mj_name2id(
+            self.mujoco_model, mujoco.mjtObj.mjOBJ_CAMERA, "track"
+        )
+        if track_camera_id < 0:
+            raise RuntimeError("MuJoCo follow camera 'track' not found in XML")
+        self.viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
+        self.viewer.cam.fixedcamid = track_camera_id
 
         # Initialize robot command data with default values
         self.robot_cmd = datatypes.RobotCmd()

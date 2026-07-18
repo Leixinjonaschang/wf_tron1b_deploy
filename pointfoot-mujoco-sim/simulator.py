@@ -113,7 +113,7 @@ class SimulatorMujoco:
         self.depth_ros_topic = os.getenv("MJLAB_DEPTH_ROS_TOPIC", "/camera/depth/image_rect_raw")
         self.depth_ros_frame_id = os.getenv("MJLAB_DEPTH_FRAME_ID", "camera_depth_optical_frame")
         self.depth_camera_name = os.getenv("MJLAB_DEPTH_CAMERA", "d435")
-        self.depth_capture_frequency = float(os.getenv("MJLAB_DEPTH_CAPTURE_HZ", "25.0"))
+        self.depth_capture_frequency = float(os.getenv("MJLAB_DEPTH_CAPTURE_HZ", "30.0"))
 
         self.dt = self.mujoco_model.opt.timestep  # Get simulation timestep
         self.fps = 1 / self.dt  # Calculate frames per second (FPS)
@@ -180,8 +180,8 @@ class SimulatorMujoco:
             raise RuntimeError(
                 f"Depth camera '{self.depth_camera_name}' not found in MuJoCo XML"
             )
-        height = int(os.getenv("MJLAB_DEPTH_HEIGHT", "28"))
-        width = int(os.getenv("MJLAB_DEPTH_WIDTH", "48"))
+        height = int(os.getenv("MJLAB_DEPTH_HEIGHT", "480"))
+        width = int(os.getenv("MJLAB_DEPTH_WIDTH", "848"))
         self.depth_renderer = mujoco.Renderer(self.mujoco_model, height=height, width=width)
         self.depth_renderer.enable_depth_rendering()
         self.depth_scene_option = mujoco.MjvOption()

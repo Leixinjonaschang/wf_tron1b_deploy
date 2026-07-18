@@ -105,8 +105,11 @@ python3 rl-deploy-with-python/main.py 10.192.1.2
 2. ROS callback 将 `sensor_msgs/Image` 转为 numpy depth。
 3. `16UC1`/`mono16` 从毫米转米，`32FC1` 保持米单位。
 4. depth 被裁剪到 `MJLAB_DEPTH_MIN` 和 `MJLAB_DEPTH_MAX`，默认 `0.0` 到 `10.0`。
-5. depth resize 到 `[1, 1, 28, 48]`。
-6. `WheelfootController.compute_actions()` 在 policy loop 中读取最新帧并输入 ONNX。
+5. 完整 D435 raw frame `480x848` 左裁 128 列，得到 `480x720`。
+6. 左裁后的图像以最近邻 resize 到 ONNX 输入 `[1, 1, 30, 45]`。
+7. `WheelfootController.compute_actions()` 在 policy loop 中读取最新帧并输入 ONNX。
+
+sim2sim 的 `d435` producer 默认发布完整 `480x848` 米深度、频率 `30 Hz`。真机和 sim2sim 都必须将完整 FOV raw frame 交给 source；不要预先传入已经裁成 `30x45` 的图像，避免重复左裁。部署前必须导出输入 depth 为 `[1, 1, 30, 45]` 的新 ONNX；旧 `[1, 1, 28, 48]` ONNX 会被接口校验拒绝。
 
 如果 ROS topic 间隔超过 `MJLAB_DEPTH_MAX_AGE`，controller 会抛出 stale frame `TimeoutError`，这是为了避免策略使用过期 depth。
 

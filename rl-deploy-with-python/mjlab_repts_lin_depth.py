@@ -32,8 +32,12 @@ from mjlab_repts import (
 PROPRIO_OBS_SIZE = 28
 PROPRIO_HISTORY_SHAPE = (HISTORY_LENGTH, PROPRIO_OBS_SIZE)
 DEPTH_CHANNELS = 1
-DEPTH_HEIGHT = 28
-DEPTH_WIDTH = 48
+D435_RAW_DEPTH_HEIGHT = 480
+D435_RAW_DEPTH_WIDTH = 848
+D435_LEFT_CROP_PX = 128
+D435_LEFT_CROP_FRACTION = D435_LEFT_CROP_PX / D435_RAW_DEPTH_WIDTH
+DEPTH_HEIGHT = 30
+DEPTH_WIDTH = 45
 DEPTH_SHAPE = (DEPTH_CHANNELS, DEPTH_HEIGHT, DEPTH_WIDTH)
 DEPTH_INPUT_SHAPE = (1, *DEPTH_SHAPE)
 HIDDEN_STATE_SIZE = 64
@@ -171,14 +175,21 @@ def preprocess_depth_image(
     min_depth: float = 0.0,
     max_depth: float = 10.0,
     invalid_value: float = 0.0,
+    left_crop_fraction: float = D435_LEFT_CROP_FRACTION,
 ) -> np.ndarray:
-    """Convert a raw depth image to ONNX input shape [1, 1, H, W]."""
+    """Convert a full-FOV raw depth image to ONNX input shape [1, 1, H, W]."""
 
     depth = np.asarray(image)
     if depth.ndim == 3 and depth.shape[-1] == 1:
         depth = depth[..., 0]
     if depth.ndim != 2:
         raise ValueError(f"depth image must have shape [H, W] or [H, W, 1], got {depth.shape}")
+    try:
+        left_crop_fraction = float(left_crop_fraction)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("left_crop_fraction must be in [0, 1)") from exc
+    if not np.isfinite(left_crop_fraction) or not 0.0 <= left_crop_fraction < 1.0:
+        raise ValueError("left_crop_fraction must be in [0, 1)")
 
     if depth_scale is None:
         if encoding in ("16UC1", "mono16"):
@@ -194,6 +205,14 @@ def preprocess_depth_image(
         neginf=invalid_value,
     )
     depth = np.clip(depth, min_depth, max_depth)
+    left_crop = int(round(depth.shape[1] * left_crop_fraction))
+    if left_crop >= depth.shape[1]:
+        raise ValueError("left_crop_fraction leaves no depth columns")
+    if depth.shape == target_shape and left_crop:
+        raise ValueError(
+            "depth image already has the policy target shape; supply full-FOV raw depth"
+        )
+    depth = depth[:, left_crop:]
     depth = _resize_nearest(depth, target_shape[0], target_shape[1])
     return depth.reshape(1, 1, target_shape[0], target_shape[1]).astype(np.float32, copy=False)
 
@@ -428,6 +447,7 @@ def _ros_image_to_depth_input(
     depth_scale: float | None = None,
     min_depth: float = 0.0,
     max_depth: float = 10.0,
+    left_crop_fraction: float = D435_LEFT_CROP_FRACTION,
 ) -> np.ndarray:
     encoding = encoding_override or msg.encoding
     image = ros_image_to_depth_meters(
@@ -441,6 +461,7 @@ def _ros_image_to_depth_input(
         depth_scale=1.0,
         min_depth=min_depth,
         max_depth=max_depth,
+        left_crop_fraction=left_crop_fraction,
     )
 
 
@@ -599,6 +620,10 @@ def validate_depth_policy_interface(
 __all__ = [
     "ACTION_CLIP",
     "DEFAULT_OBS_NOISE_RANGES",
+    "D435_LEFT_CROP_FRACTION",
+    "D435_LEFT_CROP_PX",
+    "D435_RAW_DEPTH_HEIGHT",
+    "D435_RAW_DEPTH_WIDTH",
     "DEPTH_INPUT_SHAPE",
     "HIDDEN_STATE_SHAPE",
     "POLICY_INPUT_NAMES",

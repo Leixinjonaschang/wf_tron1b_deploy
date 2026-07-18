@@ -299,15 +299,20 @@ if __name__ == '__main__':
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # Define the path to the robot model XML file based on the robot type
-    model_path = f'{script_dir}/robot-description/pointfoot/{robot_type}/xml/robot.xml'
+    scene_xml = os.getenv("MJLAB_SCENE", "robot.xml")
+    if Path(scene_xml).name != scene_xml:
+        print(f"Error: MJLAB_SCENE must be an XML filename, got '{scene_xml}'")
+        sys.exit(1)
+
+    # Define the path to the selected robot scene XML file based on robot type.
+    model_path = f'{script_dir}/robot-description/pointfoot/{robot_type}/xml/{scene_xml}'
 
     # Check if the model file exists, otherwise exit with an error
     if not os.path.exists(model_path):
-        print(f"Error: The file {model_path} does not exist. Please ensure the ROBOT_TYPE is set correctly.")
+        print(f"Error: scene XML file does not exist: {model_path}")
         sys.exit(1)
 
-    print(f"*** Model File Loaded: robot-description/pointfoot/{robot_type}/xml/robot.xml ***")
+    print(f"*** Model File Loaded: robot-description/pointfoot/{robot_type}/xml/{scene_xml} ***")
 
     # Define the names of the joint sensors used in the robot
     if robot_type.startswith("WF"):

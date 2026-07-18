@@ -10,3 +10,5 @@ __pycache__/
 *.py[cod]
 
 MUJOCO_LOG.TXT
+
+references/

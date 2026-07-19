@@ -91,33 +91,6 @@ MJLAB_DEPTH_VIEW=0 /work/scripts/docker_run_sim2sim_ros1.sh
 This disables only the Python depth viewer. The simulator and controller still
 use ROS1 depth transport.
 
-## MuJoCo Policy-Depth Overlay
-
-The raw D435 ROS image is `480 x 848`; the controller crops its left 128
-columns, clips depth to `0–10 m`, and nearest-neighbour resizes it to the
-actual ONNX input `[1, 1, 30, 45]`. To display that exact final tensor in the
-MuJoCo viewer, run:
-
-```bash
-MJLAB_DEPTH_OVERLAY=policy MJLAB_DEPTH_VIEW=0 \
-  /work/scripts/docker_run_sim2sim_ros1.sh
-```
-
-The controller publishes the tensor as `32FC1` on
-`/mjlab/policy/depth_input`; the viewer label shows its inference sequence,
-message age, and valid depth range. A missing/stale message stays explicitly
-labelled rather than falling back to raw depth. `MJLAB_DEPTH_OVERLAY=raw`
-shows the raw camera image for renderer diagnostics and labels it `RAW CAMERA
-— NOT POLICY INPUT`.
-
-Overlay is disabled by default (`off`) to preserve baseline sim2sim timing.
-When overlay is enabled, the standalone pygame viewer stays off unless you
-explicitly set `MJLAB_DEPTH_VIEW=1`. Optional display settings are
-`MJLAB_DEPTH_OVERLAY_WIDTH`, `MJLAB_DEPTH_OVERLAY_HEIGHT`,
-`MJLAB_DEPTH_OVERLAY_MARGIN`, `MJLAB_DEPTH_OVERLAY_MIN`,
-`MJLAB_DEPTH_OVERLAY_MAX`, `MJLAB_DEPTH_OVERLAY_COLORMAP`, and
-`MJLAB_DEPTH_OVERLAY_MAX_AGE`.
-
 ## Manual Step-by-Step Start
 
 Open several terminals and enter the same container in each one:

@@ -49,18 +49,6 @@ depth topic 是：
 MJLAB_DEPTH_VIEW=0 /work/scripts/docker_run_sim2sim_ros1.sh
 ```
 
-在 MuJoCo 主窗口显示实际传给 ONNX 的 policy depth（`30×45`）而不是原始相机图：
-
-```bash
-MJLAB_DEPTH_OVERLAY=policy MJLAB_DEPTH_VIEW=0 \
-  /work/scripts/docker_run_sim2sim_ros1.sh
-```
-
-默认 `MJLAB_DEPTH_OVERLAY=off`，避免诊断显示影响实时性。`raw` 模式可显示
-`480×848` 的相机深度，但会明确标注它不是 policy input；可用
-`MJLAB_POLICY_DEPTH_TOPIC`、`MJLAB_DEPTH_OVERLAY_MIN/MAX` 和
-`MJLAB_DEPTH_OVERLAY_COLORMAP=turbo|gray` 调整诊断显示。
-
 日志：
 
 ```text

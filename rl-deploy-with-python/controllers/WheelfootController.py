@@ -40,7 +40,6 @@ from mjlab_repts_lin_depth import (
     build_proprio_obs as build_lin_depth_proprio_obs,
     build_proprio_terms as build_lin_depth_proprio_terms,
     create_depth_frame_source,
-    create_policy_depth_debug_sink,
     validate_depth_policy_interface,
 )
 
@@ -287,14 +286,10 @@ class WheelfootController:
             observation_noise_cfg.get('seed')
         )
         self.depth_source = None
-        self.policy_depth_debug_sink = None
-        self.policy_inference_seq = 0
-        self._policy_depth_debug_last_warning_s = 0.0
         self.depth_hidden_state = np.zeros(LIN_DEPTH_HIDDEN_STATE_SHAPE, dtype=np.float32)
         self.predicted_lin_vel = np.zeros(3, dtype=np.float32)
         if self.is_mjlab_repts_lin_depth:
             self.depth_source = create_depth_frame_source(config['PointfootCfg'].get('depth', {}))
-            self.policy_depth_debug_sink = create_policy_depth_debug_sink()
 
         # Initialize variables for actions, observations, and commands
         self.proprio_history_vector = np.zeros(self.obs_history_length * self.observations_size)
@@ -681,8 +676,7 @@ class WheelfootController:
                 1, *LIN_DEPTH_PROPRIO_HISTORY_SHAPE
             )
             actor_command = self.commands.astype(np.float32).reshape(1, 3)
-            depth = np.ascontiguousarray(self.depth_source.frame(), dtype=np.float32)
-            self._publish_policy_depth_debug(depth)
+            depth = self.depth_source.frame().astype(np.float32)
             hidden_state = self.depth_hidden_state.astype(np.float32)
             inputs = {
                 self.policy_input_names[0]: proprio_history,
@@ -696,7 +690,6 @@ class WheelfootController:
             self.depth_hidden_state = np.asarray(output[2], dtype=np.float32).reshape(
                 LIN_DEPTH_HIDDEN_STATE_SHAPE
             )
-            self.policy_inference_seq += 1
             return
 
         # Concatenate observations into a single tensor and convert to float32
@@ -711,18 +704,6 @@ class WheelfootController:
         
         # Flatten the output and store it as actions
         self.actions = np.array(output).flatten()
-
-    def _publish_policy_depth_debug(self, depth):
-        sink = self.policy_depth_debug_sink
-        if sink is None:
-            return
-        try:
-            sink.publish(depth, inference_seq=self.policy_inference_seq)
-        except Exception as exc:
-            now = time.monotonic()
-            if now - self._policy_depth_debug_last_warning_s >= 5.0:
-                print(f"Warning: policy depth debug publish failed: {exc}")
-                self._policy_depth_debug_last_warning_s = now
 
     def compute_encoder(self):
         """

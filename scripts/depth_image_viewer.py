@@ -13,7 +13,9 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_ROOT = REPO_ROOT / "rl-deploy-with-python"
+SIM_ROOT = REPO_ROOT / "pointfoot-mujoco-sim"
 sys.path.insert(0, str(DEPLOY_ROOT))
+sys.path.insert(0, str(SIM_ROOT))
 
 from mjlab_repts_lin_depth import (
     D435_RAW_DEPTH_HEIGHT,
@@ -21,6 +23,7 @@ from mjlab_repts_lin_depth import (
     _resolve_ros_type,
     ros_image_to_depth_meters,
 )
+from depth_visualization import colorize_depth
 
 
 DEFAULT_TOPIC = "/camera/depth/image_rect_raw"
@@ -30,20 +33,6 @@ DEFAULT_SCALE = 1
 DEFAULT_REFRESH_HZ = 30.0
 DEFAULT_WINDOW_HEIGHT = D435_RAW_DEPTH_HEIGHT
 DEFAULT_WINDOW_WIDTH = D435_RAW_DEPTH_WIDTH
-
-_TURBO_STOPS = np.array(
-    [
-        [48, 18, 59],
-        [50, 101, 194],
-        [43, 180, 233],
-        [105, 221, 113],
-        [238, 218, 38],
-        [230, 107, 29],
-        [122, 4, 3],
-    ],
-    dtype=np.float32,
-)
-
 
 @dataclass
 class DepthViewerConfig:
@@ -226,49 +215,6 @@ def config_from_env() -> DepthViewerConfig:
         refresh_hz=max(1.0, _env_float("MJLAB_DEPTH_VIEW_HZ", DEFAULT_REFRESH_HZ)),
         colormap=os.getenv("MJLAB_DEPTH_VIEW_COLORMAP", "turbo").lower(),
     )
-
-
-def colorize_depth(
-    depth_m: np.ndarray,
-    *,
-    min_depth: float = DEFAULT_MIN_DEPTH,
-    max_depth: float = DEFAULT_MAX_DEPTH,
-    colormap: str = "turbo",
-) -> np.ndarray:
-    depth = np.asarray(depth_m, dtype=np.float32)
-    if depth.ndim != 2:
-        raise ValueError(f"depth image must be 2D, got {depth.shape}")
-    if max_depth <= min_depth:
-        raise ValueError("max_depth must be greater than min_depth")
-
-    finite = np.isfinite(depth)
-    valid = finite & (depth > 0.0)
-    normalized = np.zeros(depth.shape, dtype=np.float32)
-    normalized[valid] = np.clip(
-        (depth[valid] - np.float32(min_depth)) / np.float32(max_depth - min_depth),
-        0.0,
-        1.0,
-    )
-
-    if colormap == "gray":
-        gray = (normalized * 255.0).astype(np.uint8)
-        rgb = np.repeat(gray[..., None], 3, axis=2)
-    elif colormap == "turbo":
-        rgb = _turbo_colorize(normalized)
-    else:
-        raise ValueError("MJLAB_DEPTH_VIEW_COLORMAP must be 'turbo' or 'gray'")
-
-    rgb[~valid] = 0
-    return rgb
-
-
-def _turbo_colorize(normalized: np.ndarray) -> np.ndarray:
-    positions = normalized * np.float32(len(_TURBO_STOPS) - 1)
-    low = np.floor(positions).astype(np.int32)
-    high = np.clip(low + 1, 0, len(_TURBO_STOPS) - 1)
-    weight = (positions - low.astype(np.float32))[..., None]
-    rgb = _TURBO_STOPS[low] * (1.0 - weight) + _TURBO_STOPS[high] * weight
-    return np.clip(rgb, 0, 255).astype(np.uint8)
 
 
 def run_viewer(cfg: DepthViewerConfig) -> None:

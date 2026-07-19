@@ -46,6 +46,15 @@ export MJLAB_DEPTH_HEIGHT="${MJLAB_DEPTH_HEIGHT:-480}"
 export MJLAB_DEPTH_WIDTH="${MJLAB_DEPTH_WIDTH:-848}"
 export MJLAB_DEPTH_MAX_AGE="${MJLAB_DEPTH_MAX_AGE:-0.5}"
 export MJLAB_DEPTH_TIMEOUT="${MJLAB_DEPTH_TIMEOUT:-2.0}"
+export MJLAB_DEPTH_OVERLAY="${MJLAB_DEPTH_OVERLAY:-off}"
+export MJLAB_POLICY_DEPTH_TOPIC="${MJLAB_POLICY_DEPTH_TOPIC:-/mjlab/policy/depth_input}"
+export MJLAB_DEPTH_OVERLAY_WIDTH="${MJLAB_DEPTH_OVERLAY_WIDTH:-360}"
+export MJLAB_DEPTH_OVERLAY_HEIGHT="${MJLAB_DEPTH_OVERLAY_HEIGHT:-240}"
+export MJLAB_DEPTH_OVERLAY_MARGIN="${MJLAB_DEPTH_OVERLAY_MARGIN:-12}"
+export MJLAB_DEPTH_OVERLAY_MIN="${MJLAB_DEPTH_OVERLAY_MIN:-0.0}"
+export MJLAB_DEPTH_OVERLAY_MAX="${MJLAB_DEPTH_OVERLAY_MAX:-10.0}"
+export MJLAB_DEPTH_OVERLAY_COLORMAP="${MJLAB_DEPTH_OVERLAY_COLORMAP:-turbo}"
+export MJLAB_DEPTH_OVERLAY_MAX_AGE="${MJLAB_DEPTH_OVERLAY_MAX_AGE:-0.5}"
 
 # Keep the legacy file path configured for fallback/debug modes that use npy.
 export MJLAB_DEPTH_NPY_PATH="${MJLAB_DEPTH_NPY_PATH:-/work/logs/sim2sim/depth_frame.npy}"
@@ -53,7 +62,9 @@ export MJLAB_DEPTH_NPY_PATH="${MJLAB_DEPTH_NPY_PATH:-/work/logs/sim2sim/depth_fr
 # Enable the Python depth viewer by default when DISPLAY is available. Set
 # MJLAB_DEPTH_VIEW=0 to run simulator/controller/joystick without the viewer.
 if [[ -z "${MJLAB_DEPTH_VIEW:-}" ]]; then
-  if [[ -n "${DISPLAY:-}" ]]; then
+  if [[ "${MJLAB_DEPTH_OVERLAY}" != "off" ]]; then
+    export MJLAB_DEPTH_VIEW=0
+  elif [[ -n "${DISPLAY:-}" ]]; then
     export MJLAB_DEPTH_VIEW=1
   else
     export MJLAB_DEPTH_VIEW=0

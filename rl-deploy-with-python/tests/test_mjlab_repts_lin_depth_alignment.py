@@ -15,6 +15,7 @@ import numpy as np
 
 DEPLOY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(DEPLOY_ROOT))
+sys.path.insert(0, str(DEPLOY_ROOT.parent / "pointfoot-mujoco-sim"))
 
 from mjlab_repts_lin_depth import (  # noqa: E402
     D435_LEFT_CROP_FRACTION,
@@ -22,6 +23,8 @@ from mjlab_repts_lin_depth import (  # noqa: E402
     D435_RAW_DEPTH_HEIGHT,
     D435_RAW_DEPTH_WIDTH,
     DEPTH_INPUT_SHAPE,
+    DEPTH_HEIGHT,
+    DEPTH_WIDTH,
     HIDDEN_STATE_SHAPE,
     POLICY_INPUT_NAMES,
     POLICY_OUTPUT_NAMES,
@@ -32,11 +35,13 @@ from mjlab_repts_lin_depth import (  # noqa: E402
     build_proprio_obs,
     build_proprio_terms,
     preprocess_depth_image,
+    create_policy_depth_debug_sink,
     ros_image_to_depth_meters,
     validate_depth_policy_interface,
     _resolve_ros_type,
     _ros_image_to_depth_input,
 )
+from depth_visualization import colorize_depth, fit_overlay_rect, resize_rgb_nearest  # noqa: E402
 
 
 MODEL_DIR = DEPLOY_ROOT / "controllers" / "model"
@@ -99,6 +104,7 @@ class FakeRosStamp:
 class FakeRosHeader:
     def __init__(self):
         self.stamp = FakeRosStamp()
+        self.seq = 0
 
 
 class FakeRosImage:
@@ -334,6 +340,120 @@ class FakePolicySession:
 
 
 class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
+    def test_policy_depth_debug_publisher_uses_exact_wire_format(self):
+        state = {"published": []}
+        fake_modules = _fake_ros1_modules([], state)
+        depth = np.arange(np.prod(DEPTH_INPUT_SHAPE), dtype=np.float32).reshape(
+            DEPTH_INPUT_SHAPE
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {"MJLAB_DEPTH_OVERLAY": "policy", "ROS_TYPE": "ros1"},
+            clear=False,
+        ):
+            with mock.patch.dict(sys.modules, fake_modules):
+                sink = create_policy_depth_debug_sink()
+                sink.publish(depth, inference_seq=17)
+
+        msg = state["published"][0]
+        self.assertEqual(state["publisher"][1], "/mjlab/policy/depth_input")
+        self.assertEqual(msg.header.seq, 17)
+        self.assertEqual(msg.encoding, "32FC1")
+        self.assertEqual((msg.height, msg.width, msg.step), (DEPTH_HEIGHT, DEPTH_WIDTH, 180))
+        self.assertEqual(msg.data, depth.reshape(DEPTH_HEIGHT, DEPTH_WIDTH).astype("<f4").tobytes())
+
+    def test_depth_debug_sink_matches_onnx_input_and_is_best_effort(self):
+        wheelfoot_module = _import_wheelfoot_module()
+        depth = np.arange(np.prod(DEPTH_INPUT_SHAPE), dtype=np.float32).reshape(
+            DEPTH_INPUT_SHAPE
+        )
+
+        class Source:
+            calls = 0
+
+            def frame(self):
+                self.calls += 1
+                return depth
+
+        class Sink:
+            received = None
+
+            def publish(self, received, inference_seq):
+                self.received = (received, inference_seq)
+
+        class Session:
+            received = None
+
+            def run(self, _names, inputs):
+                self.received = inputs["depth"]
+                return [
+                    np.zeros((1, 8), dtype=np.float32),
+                    np.zeros((1, 3), dtype=np.float32),
+                    np.zeros(HIDDEN_STATE_SHAPE, dtype=np.float32),
+                ]
+
+        controller = wheelfoot_module.WheelfootController.__new__(
+            wheelfoot_module.WheelfootController
+        )
+        controller.is_mjlab_repts = False
+        controller.is_mjlab_repts_lin = False
+        controller.is_mjlab_repts_lin_depth = True
+        controller.depth_source = Source()
+        controller.policy_depth_debug_sink = Sink()
+        controller.policy_inference_seq = 4
+        controller._policy_depth_debug_last_warning_s = 0.0
+        controller.proprio_history_vector = np.zeros((5, 28), dtype=np.float32)
+        controller.commands = np.zeros(3, dtype=np.float32)
+        controller.depth_hidden_state = np.zeros(HIDDEN_STATE_SHAPE, dtype=np.float32)
+        controller.policy_input_names = POLICY_INPUT_NAMES
+        controller.policy_output_names = POLICY_OUTPUT_NAMES
+        controller.policy_session = Session()
+
+        controller.compute_actions()
+        self.assertEqual(controller.depth_source.calls, 1)
+        self.assertIs(controller.policy_depth_debug_sink.received[0], controller.policy_session.received)
+        self.assertEqual(controller.policy_depth_debug_sink.received[1], 4)
+        np.testing.assert_array_equal(controller.policy_session.received, depth)
+        self.assertEqual(controller.policy_inference_seq, 5)
+
+        class FailingSink:
+            def publish(self, *_args, **_kwargs):
+                raise RuntimeError("debug transport failure")
+
+        controller.policy_depth_debug_sink = FailingSink()
+        controller.compute_actions()
+        self.assertEqual(controller.policy_inference_seq, 6)
+
+    def test_policy_depth_decoder_and_visualization_helpers(self):
+        fake_modules = _fake_ros1_modules([])
+        simulator = _import_simulator_module(fake_modules)
+        source = np.linspace(0.0, 4.0, DEPTH_HEIGHT * DEPTH_WIDTH, dtype=np.float32).reshape(
+            DEPTH_HEIGHT, DEPTH_WIDTH
+        )
+        msg = FakeRosImage()
+        msg.height = DEPTH_HEIGHT
+        msg.width = DEPTH_WIDTH
+        msg.encoding = "32FC1"
+        msg.is_bigendian = 0
+        msg.step = DEPTH_WIDTH * 4
+        msg.data = source.astype("<f4").tobytes()
+        decoded = simulator.decode_policy_depth_image(msg)
+        np.testing.assert_array_equal(decoded, source)
+        msg.encoding = "16UC1"
+        with self.assertRaisesRegex(ValueError, "32FC1"):
+            simulator.decode_policy_depth_image(msg)
+
+        rgb = colorize_depth(np.array([[0.0, 1.0], [np.nan, 10.0]], dtype=np.float32))
+        self.assertEqual(rgb.dtype, np.uint8)
+        self.assertTrue(rgb.flags.c_contiguous)
+        np.testing.assert_array_equal(rgb[0, 0], np.zeros(3, dtype=np.uint8))
+        np.testing.assert_array_equal(rgb[1, 0], np.zeros(3, dtype=np.uint8))
+        enlarged = resize_rgb_nearest(rgb, 8, 10)
+        self.assertEqual(enlarged.shape, (8, 10, 3))
+        np.testing.assert_array_equal(enlarged[0, 0], rgb[0, 0])
+        self.assertEqual(fit_overlay_rect((30, 45), (800, 600), (360, 240), 12), (428, 12, 360, 240))
+
     def test_resolve_ros_type_accepts_only_ros1(self):
         with mock.patch.dict(os.environ, {"ROS_TYPE": "ros1", "ROS_VERSION": "1"}, clear=True):
             self.assertEqual(_resolve_ros_type("ros1"), "ros1")

@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 IMAGE_NAME="${IMAGE_NAME:-tron_sim2sim:latest}"
 CONTAINER_NAME="${CONTAINER_NAME:-tron_deploy}"
+NVIDIA_GPU="${NVIDIA_GPU:-all}"
 
 if docker container inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
   if [[ "$(docker inspect -f '{{.State.Running}}' "${CONTAINER_NAME}")" == "true" ]]; then
@@ -32,10 +33,18 @@ if [[ -e /dev/dri ]]; then
   DOCKER_DEVICES=(--device /dev/dri)
 fi
 
+DOCKER_GPU_ARGS=()
+if [[ "${NVIDIA_GPU}" != "0" && "${NVIDIA_GPU}" != "none" ]]; then
+  DOCKER_GPU_ARGS=(--gpus "${NVIDIA_GPU}")
+fi
+
 docker run -d \
   --name "${CONTAINER_NAME}" \
   --network host \
+  "${DOCKER_GPU_ARGS[@]}" \
   -e DISPLAY="${DISPLAY:-}" \
+  -e NVIDIA_VISIBLE_DEVICES="${NVIDIA_VISIBLE_DEVICES:-all}" \
+  -e NVIDIA_DRIVER_CAPABILITIES="${NVIDIA_DRIVER_CAPABILITIES:-graphics,compute,utility}" \
   -e XAUTHORITY=/tmp/.docker.xauth \
   -e ROBOT_TYPE="${ROBOT_TYPE:-WF_TRON1B}" \
   -e RL_TYPE="${RL_TYPE:-mjlab_repts_lin_depth}" \
@@ -45,14 +54,14 @@ docker run -d \
   -e MJLAB_DEPTH_SINK="${MJLAB_DEPTH_SINK:-ros}" \
   -e MJLAB_DEPTH_ROS_TOPIC="${MJLAB_DEPTH_ROS_TOPIC:-/camera/depth/image_rect_raw}" \
   -e MJLAB_DEPTH_TIMEOUT="${MJLAB_DEPTH_TIMEOUT:-2.0}" \
-  -e MJLAB_DEPTH_CAPTURE_HZ="${MJLAB_DEPTH_CAPTURE_HZ:-25.0}" \
-  -e MJLAB_DEPTH_HEIGHT="${MJLAB_DEPTH_HEIGHT:-28}" \
-  -e MJLAB_DEPTH_WIDTH="${MJLAB_DEPTH_WIDTH:-48}" \
+  -e MJLAB_DEPTH_CAPTURE_HZ="${MJLAB_DEPTH_CAPTURE_HZ:-30.0}" \
+  -e MJLAB_DEPTH_HEIGHT="${MJLAB_DEPTH_HEIGHT:-480}" \
+  -e MJLAB_DEPTH_WIDTH="${MJLAB_DEPTH_WIDTH:-848}" \
   -e MJLAB_DEPTH_MAX_AGE="${MJLAB_DEPTH_MAX_AGE:-0.5}" \
   -e MJLAB_DEPTH_NPY_PATH="${MJLAB_DEPTH_NPY_PATH:-/work/logs/sim2sim/depth_frame.npy}" \
   -e MJLAB_DEPTH_VIEW="${MJLAB_DEPTH_VIEW:-1}" \
   -e MJLAB_DEPTH_VIEW_SOURCE="${MJLAB_DEPTH_VIEW_SOURCE:-${MJLAB_DEPTH_SOURCE:-ros}}" \
-  -e MJLAB_DEPTH_VIEW_SCALE="${MJLAB_DEPTH_VIEW_SCALE:-10}" \
+  -e MJLAB_DEPTH_VIEW_SCALE="${MJLAB_DEPTH_VIEW_SCALE:-1}" \
   -e MJLAB_DEPTH_VIEW_MIN="${MJLAB_DEPTH_VIEW_MIN:-0.0}" \
   -e MJLAB_DEPTH_VIEW_MAX="${MJLAB_DEPTH_VIEW_MAX:-10.0}" \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
@@ -63,4 +72,5 @@ docker run -d \
   bash -lc 'source /opt/conda/etc/profile.d/conda.sh && set +u && conda activate sim && set -u && cd /work && sleep infinity'
 
 echo "Started container: ${CONTAINER_NAME}"
+echo "NVIDIA GPU request: ${NVIDIA_GPU}"
 echo "Enter with: docker exec -it ${CONTAINER_NAME} bash"

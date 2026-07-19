@@ -16,6 +16,45 @@ cd wf_tron1b_deploy
 sudo -E IMAGE_NAME=tron_sim2sim:latest scripts/docker_build_ros1.sh
 ```
 
+### NVIDIA GPU prerequisite (Ubuntu/Debian host)
+
+The ROS1 Docker workflow uses the host GPU for MuJoCo rendering. Before creating
+`tron_deploy`, Docker must be able to access a working NVIDIA driver (`nvidia-smi`
+must succeed on the host) and the NVIDIA Container Toolkit must be installed and
+configured. Docker itself and an NVIDIA GPU driver are host prerequisites; a CUDA
+toolkit installation is not required.
+
+Install and configure the toolkit using NVIDIA's production repository:
+
+```bash
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+  sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+If `tron_deploy` was created before this setup, remove and recreate that persistent
+container so it receives the GPU runtime configuration:
+
+```bash
+sudo docker rm -f tron_deploy
+```
+
+After starting the container below, verify GPU access with:
+
+```bash
+sudo docker exec tron_deploy nvidia-smi
+```
+
+If Docker reports `failed to discover GPU vendor from CDI`, re-check that host
+`nvidia-smi` works, rerun `nvidia-ctk runtime configure --runtime=docker`, restart
+Docker, then recreate `tron_deploy`.
+
 
 启动持久 Docker 容器：
 
@@ -56,6 +95,39 @@ MJLAB_DEPTH_VIEW=0 /work/scripts/docker_run_sim2sim_ros1.sh
 ```
 
 更多细节见：`doc/ros1_depth_sim2sim.md`。
+
+## Terrain Scenes
+
+离线地形工具位于 `utils/terrain_tool/`。修改地形定义后，在仓库根目录生成全部场景：
+
+```bash
+uv run python utils/terrain_tool/terrain_generator.py
+```
+
+生成的场景位于
+`pointfoot-mujoco-sim/robot-description/pointfoot/WF_TRON1B/xml/`：
+
+- `scene_stairs.xml`：低台阶。
+- `scene_slope.xml`：缓坡。
+- `scene_rough_ground.xml`：碎石/不平地。
+- `scene_obstacle.xml`：偏置圆柱障碍物。
+- `scene_terrain.xml`：以上四类地形的组合课程。
+
+用 `MJLAB_SCENE` 选择场景；未设置时仍使用平地 `robot.xml`。例如在 ROS1 Docker 容器内运行碎石场景：
+
+```bash
+MJLAB_SCENE=scene_rough_ground.xml /work/scripts/docker_run_sim2sim_ros1.sh
+```
+
+`scene_rough_ground.xml` 的难度定义在
+`utils/terrain_tool/terrain_generator.py` 的 `add_rough_ground_course()`：
+
+- `init_pos[2]` 与 `box_size[2]` 控制露出高度；当前约为 8–12 cm。
+- `box_size_rand[2]` 控制高度起伏。
+- `box_euler_rand` 控制随机倾角（单位为弧度）。
+- `separation` 控制块间缝隙，`nums` 控制地形覆盖范围。
+
+每次调整后重新运行生成器；它会同步更新独立碎石场景和组合场景。
 
 ## Non-Perceptive Sim-to-Sim Test
 

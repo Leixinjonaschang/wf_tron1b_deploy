@@ -15,16 +15,21 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_ROOT = REPO_ROOT / "rl-deploy-with-python"
 sys.path.insert(0, str(DEPLOY_ROOT))
 
-from mjlab_repts_lin_depth import _resolve_ros_type, ros_image_to_depth_meters
+from mjlab_repts_lin_depth import (
+    D435_RAW_DEPTH_HEIGHT,
+    D435_RAW_DEPTH_WIDTH,
+    _resolve_ros_type,
+    ros_image_to_depth_meters,
+)
 
 
 DEFAULT_TOPIC = "/camera/depth/image_rect_raw"
 DEFAULT_MIN_DEPTH = 0.0
 DEFAULT_MAX_DEPTH = 10.0
-DEFAULT_SCALE = 10
+DEFAULT_SCALE = 1
 DEFAULT_REFRESH_HZ = 30.0
-DEFAULT_WINDOW_HEIGHT = 28
-DEFAULT_WINDOW_WIDTH = 48
+DEFAULT_WINDOW_HEIGHT = D435_RAW_DEPTH_HEIGHT
+DEFAULT_WINDOW_WIDTH = D435_RAW_DEPTH_WIDTH
 
 _TURBO_STOPS = np.array(
     [
@@ -38,7 +43,6 @@ _TURBO_STOPS = np.array(
     ],
     dtype=np.float32,
 )
-
 
 @dataclass
 class DepthViewerConfig:

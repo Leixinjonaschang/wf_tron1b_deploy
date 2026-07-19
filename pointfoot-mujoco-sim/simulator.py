@@ -113,7 +113,7 @@ class SimulatorMujoco:
         self.depth_ros_topic = os.getenv("MJLAB_DEPTH_ROS_TOPIC", "/camera/depth/image_rect_raw")
         self.depth_ros_frame_id = os.getenv("MJLAB_DEPTH_FRAME_ID", "camera_depth_optical_frame")
         self.depth_camera_name = os.getenv("MJLAB_DEPTH_CAMERA", "d435")
-        self.depth_capture_frequency = float(os.getenv("MJLAB_DEPTH_CAPTURE_HZ", "25.0"))
+        self.depth_capture_frequency = float(os.getenv("MJLAB_DEPTH_CAPTURE_HZ", "30.0"))
 
         self.dt = self.mujoco_model.opt.timestep  # Get simulation timestep
         self.fps = 1 / self.dt  # Calculate frames per second (FPS)
@@ -129,12 +129,15 @@ class SimulatorMujoco:
                     self.depth_ros_topic,
                     frame_id=self.depth_ros_frame_id,
                 )
-
-        # Launch the MuJoCo viewer in passive mode with custom settings
+        # Launch the MuJoCo viewer with the XML's fixed third-person camera.
         self.viewer = viewer.launch_passive(self.mujoco_model, self.mujoco_data, key_callback=self.key_callback, show_left_ui=True, show_right_ui=True)
-        self.viewer.cam.distance = 10  # Set camera distance
-        self.viewer.cam.elevation = -20  # Set camera elevation
-
+        track_camera_id = mujoco.mj_name2id(
+            self.mujoco_model, mujoco.mjtObj.mjOBJ_CAMERA, "track"
+        )
+        if track_camera_id < 0:
+            raise RuntimeError("MuJoCo follow camera 'track' not found in XML")
+        self.viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
+        self.viewer.cam.fixedcamid = track_camera_id
         # Initialize robot command data with default values
         self.robot_cmd = datatypes.RobotCmd()
         self.robot_cmd.mode = [0. for x in range(0, self.joint_num)]
@@ -180,8 +183,8 @@ class SimulatorMujoco:
             raise RuntimeError(
                 f"Depth camera '{self.depth_camera_name}' not found in MuJoCo XML"
             )
-        height = int(os.getenv("MJLAB_DEPTH_HEIGHT", "28"))
-        width = int(os.getenv("MJLAB_DEPTH_WIDTH", "48"))
+        height = int(os.getenv("MJLAB_DEPTH_HEIGHT", "480"))
+        width = int(os.getenv("MJLAB_DEPTH_WIDTH", "848"))
         self.depth_renderer = mujoco.Renderer(self.mujoco_model, height=height, width=width)
         self.depth_renderer.enable_depth_rendering()
         self.depth_scene_option = mujoco.MjvOption()
@@ -299,15 +302,20 @@ if __name__ == '__main__':
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # Define the path to the robot model XML file based on the robot type
-    model_path = f'{script_dir}/robot-description/pointfoot/{robot_type}/xml/robot.xml'
+    scene_xml = os.getenv("MJLAB_SCENE", "robot.xml")
+    if Path(scene_xml).name != scene_xml:
+        print(f"Error: MJLAB_SCENE must be an XML filename, got '{scene_xml}'")
+        sys.exit(1)
+
+    # Define the path to the selected robot scene XML file based on robot type.
+    model_path = f'{script_dir}/robot-description/pointfoot/{robot_type}/xml/{scene_xml}'
 
     # Check if the model file exists, otherwise exit with an error
     if not os.path.exists(model_path):
-        print(f"Error: The file {model_path} does not exist. Please ensure the ROBOT_TYPE is set correctly.")
+        print(f"Error: scene XML file does not exist: {model_path}")
         sys.exit(1)
 
-    print(f"*** Model File Loaded: robot-description/pointfoot/{robot_type}/xml/robot.xml ***")
+    print(f"*** Model File Loaded: robot-description/pointfoot/{robot_type}/xml/{scene_xml} ***")
 
     # Define the names of the joint sensors used in the robot
     if robot_type.startswith("WF"):

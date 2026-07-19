@@ -17,6 +17,10 @@ DEPLOY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(DEPLOY_ROOT))
 
 from mjlab_repts_lin_depth import (  # noqa: E402
+    D435_LEFT_CROP_FRACTION,
+    D435_LEFT_CROP_PX,
+    D435_RAW_DEPTH_HEIGHT,
+    D435_RAW_DEPTH_WIDTH,
     DEPTH_INPUT_SHAPE,
     HIDDEN_STATE_SHAPE,
     POLICY_INPUT_NAMES,
@@ -302,7 +306,7 @@ class FakePolicySession:
         return [
             FakeIo("proprio_history", [1, 5, 28]),
             FakeIo("actor_command", [1, 3]),
-            FakeIo("depth", [1, 1, 28, 48]),
+            FakeIo("depth", [1, 1, 30, 45]),
             FakeIo("hidden_state_in", [1, 64]),
         ]
 
@@ -405,6 +409,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
             encoding="16UC1",
             target_shape=(2, 2),
             max_depth=10.0,
+            left_crop_fraction=0.0,
         )
 
         self.assertEqual(depth.shape, (1, 1, 2, 2))
@@ -412,6 +417,49 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
             depth[0, 0],
             np.array([[0.0, 1.0], [2.0, 10.0]], dtype=np.float32),
         )
+
+    def test_depth_preprocess_crops_d435_left_columns_before_resize(self):
+        raw = np.add.outer(
+            np.linspace(0.0, 1.0, D435_RAW_DEPTH_HEIGHT, dtype=np.float32),
+            np.linspace(0.0, 1.0, D435_RAW_DEPTH_WIDTH, dtype=np.float32),
+        )
+        raw[:, :D435_LEFT_CROP_PX] = 9.0
+
+        depth = preprocess_depth_image(raw)
+
+        cropped = raw[:, D435_LEFT_CROP_PX:]
+        row_idx = np.linspace(0, cropped.shape[0] - 1, 30).round().astype(np.int64)
+        col_idx = np.linspace(0, cropped.shape[1] - 1, 45).round().astype(np.int64)
+        expected = cropped[row_idx[:, None], col_idx[None, :]]
+        self.assertEqual(depth.shape, (1, 1, 30, 45))
+        np.testing.assert_allclose(depth[0, 0], expected)
+
+    def test_depth_preprocess_crops_training_shape_to_policy_shape(self):
+        raw = np.tile(np.linspace(0.0, 1.0, 53, dtype=np.float32), (30, 1))
+        raw[:, :8] = 9.0
+
+        depth = preprocess_depth_image(raw)
+
+        self.assertEqual(depth.shape, (1, 1, 30, 45))
+        np.testing.assert_allclose(depth[0, 0], raw[:, 8:])
+        self.assertEqual(D435_LEFT_CROP_FRACTION, 8 / 53)
+
+    def test_depth_preprocess_rejects_invalid_or_empty_left_crop(self):
+        for left_crop_fraction in (-0.01, 1.0, float("nan")):
+            with self.assertRaisesRegex(ValueError, "left_crop_fraction"):
+                preprocess_depth_image(
+                    np.ones((2, 2), dtype=np.float32),
+                    left_crop_fraction=left_crop_fraction,
+                )
+        with self.assertRaisesRegex(ValueError, "leaves no depth columns"):
+            preprocess_depth_image(
+                np.ones((1, 1), dtype=np.float32),
+                left_crop_fraction=0.75,
+            )
+
+    def test_depth_preprocess_rejects_already_cropped_policy_frame(self):
+        with self.assertRaisesRegex(ValueError, "already has the policy target shape"):
+            preprocess_depth_image(np.ones((30, 45), dtype=np.float32))
 
     def test_ros_depth_image_respects_step_padding(self):
         msg = FakeRosImage()
@@ -425,9 +473,14 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
             dtype=np.uint16,
         ).tobytes()
 
-        depth = _ros_image_to_depth_input(msg, min_depth=0.0, max_depth=10.0)
+        depth = _ros_image_to_depth_input(
+            msg,
+            min_depth=0.0,
+            max_depth=10.0,
+            left_crop_fraction=0.0,
+        )
 
-        self.assertEqual(depth.shape, (1, 1, 28, 48))
+        self.assertEqual(depth.shape, (1, 1, 30, 45))
         np.testing.assert_allclose(depth[0, 0, 0, 0], 1.0)
         np.testing.assert_allclose(depth[0, 0, 0, -1], 2.0)
         np.testing.assert_allclose(depth[0, 0, -1, 0], 3.0)
@@ -550,7 +603,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
     def test_validate_depth_policy_interface_accepts_expected_metadata(self):
         validate_depth_policy_interface(
             POLICY_INPUT_NAMES,
-            [[1, 5, 28], [1, 3], [1, 1, 28, 48], [1, 64]],
+            [[1, 5, 28], [1, 3], [1, 1, 30, 45], [1, 64]],
             POLICY_OUTPUT_NAMES,
             [[1, 8], [1, 3], [1, 64]],
             FakeMeta.custom_metadata_map,
@@ -562,7 +615,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
 
         validate_depth_policy_interface(
             POLICY_INPUT_NAMES,
-            [[1, 5, 28], [1, 3], [1, 1, 28, 48], [1, 64]],
+            [[1, 5, 28], [1, 3], [1, 1, 30, 45], [1, 64]],
             POLICY_OUTPUT_NAMES,
             [[1, 8], [1, 3], [1, 64]],
             metadata,
@@ -575,6 +628,15 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
                 [[1, 5, 31]],
                 ["actions"],
                 [[1, 8]],
+            )
+
+    def test_validate_depth_policy_interface_rejects_legacy_depth_shape(self):
+        with self.assertRaisesRegex(ValueError, "input shapes"):
+            validate_depth_policy_interface(
+                POLICY_INPUT_NAMES,
+                [[1, 5, 28], [1, 3], [1, 1, 28, 48], [1, 64]],
+                POLICY_OUTPUT_NAMES,
+                [[1, 8], [1, 3], [1, 64]],
             )
 
     def test_controller_branch_loads_depth_policy_without_encoder(self):
@@ -599,17 +661,33 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
 
     def test_controller_depth_walk_step_updates_hidden_state(self):
         wheelfoot_module = _import_wheelfoot_module()
+        subscriber_callbacks = []
 
-        with mock.patch.object(wheelfoot_module.ort, "InferenceSession", FakePolicySession):
-            env = {"MJLAB_DEPTH_SOURCE": "zero"}
-            with mock.patch.dict(os.environ, env, clear=False):
-                controller = wheelfoot_module.WheelfootController(
-                    str(MODEL_DIR),
-                    FakeRobot(),
-                    "WF_TRON1B",
-                    "mjlab_repts_lin_depth",
-                    start_controller=False,
-                )
+        with mock.patch.dict(sys.modules, _fake_ros1_modules(subscriber_callbacks)):
+            with mock.patch.object(wheelfoot_module.ort, "InferenceSession", FakePolicySession):
+                env = {"MJLAB_DEPTH_SOURCE": "ros", "ROS_TYPE": "ros1"}
+                with mock.patch.dict(os.environ, env, clear=False):
+                    controller = wheelfoot_module.WheelfootController(
+                        str(MODEL_DIR),
+                        FakeRobot(),
+                        "WF_TRON1B",
+                        "mjlab_repts_lin_depth",
+                        start_controller=False,
+                    )
+
+        raw_depth = np.full(
+            (D435_RAW_DEPTH_HEIGHT, D435_RAW_DEPTH_WIDTH),
+            1500,
+            dtype=np.uint16,
+        )
+        msg = FakeRosImage()
+        msg.header = FakeRosHeader()
+        msg.height, msg.width = raw_depth.shape
+        msg.encoding = "16UC1"
+        msg.is_bigendian = 0
+        msg.step = msg.width * raw_depth.dtype.itemsize
+        msg.data = raw_depth.tobytes()
+        subscriber_callbacks[0](msg)
 
         controller.loop_count = 3
         with contextlib.redirect_stdout(io.StringIO()) as output:
@@ -617,7 +695,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
 
         self.assertTrue(controller.mjlab_repts_policy_initialized)
         self.assertTrue(controller.mjlab_repts_diagnostics_printed)
-        self.assertIn("depth source: ZeroDepthFrameSource", output.getvalue())
+        self.assertIn("depth source: RosDepthFrameSource", output.getvalue())
         np.testing.assert_allclose(
             controller.depth_hidden_state,
             np.ones(HIDDEN_STATE_SHAPE, dtype=np.float32),
@@ -626,6 +704,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
             controller.predicted_lin_vel,
             np.array([0.1, -0.2, 0.3], dtype=np.float32),
         )
+        self.assertEqual(controller.depth_source.frame().shape, DEPTH_INPUT_SHAPE)
         self.assertEqual(controller.observations.shape, (28,))
 
 

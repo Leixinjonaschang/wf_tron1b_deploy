@@ -9,6 +9,7 @@ LOG_DIR="${REPO_DIR}/logs/sim2sim"
 
 ROBOT_TYPE="${ROBOT_TYPE:-WF_TRON1B}"
 RL_TYPE="${RL_TYPE:-mjlab_repts}"
+MJLAB_SCENE="${MJLAB_SCENE:-robot.xml}"
 ROBOT_IP="${ROBOT_IP:-127.0.0.1}"
 SIM_START_DELAY="${SIM_START_DELAY:-2}"
 CTRL_START_DELAY="${CTRL_START_DELAY:-1}"
@@ -18,7 +19,7 @@ SIMULATOR="${SIM_DIR}/simulator.py"
 CONTROLLER="${CTRL_DIR}/main.py"
 DEPTH_VIEWER="${SCRIPT_DIR}/depth_image_viewer.py"
 JOYSTICK="${SIM_DIR}/robot-joystick/robot-joystick"
-MODEL_XML="${SIM_DIR}/robot-description/pointfoot/${ROBOT_TYPE}/xml/robot.xml"
+MODEL_XML="${SIM_DIR}/robot-description/pointfoot/${ROBOT_TYPE}/xml/${MJLAB_SCENE}"
 POLICY="${CTRL_DIR}/controllers/model/${ROBOT_TYPE}/policy/${RL_TYPE}/policy.onnx"
 DEPTH_FRAME_PATH="${MJLAB_DEPTH_NPY_PATH:-${LOG_DIR}/depth_frame.npy}"
 
@@ -34,6 +35,7 @@ Usage:
 Defaults:
   ROBOT_TYPE=${ROBOT_TYPE}
   RL_TYPE=${RL_TYPE}
+  MJLAB_SCENE=${MJLAB_SCENE}
   ROBOT_IP=${ROBOT_IP}
   SIM_START_DELAY=${SIM_START_DELAY}
   CTRL_START_DELAY=${CTRL_START_DELAY}
@@ -248,15 +250,16 @@ setup_python_cmd
 
 export ROBOT_TYPE
 export RL_TYPE
+export MJLAB_SCENE
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 if [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]]; then
   export ROS_TYPE="${ROS_TYPE:-ros1}"
   export MJLAB_DEPTH_SOURCE="${MJLAB_DEPTH_SOURCE:-ros}"
   export MJLAB_DEPTH_SINK="${MJLAB_DEPTH_SINK:-ros}"
   export MJLAB_DEPTH_ROS_TOPIC="${MJLAB_DEPTH_ROS_TOPIC:-/camera/depth/image_rect_raw}"
-  export MJLAB_DEPTH_CAPTURE_HZ="${MJLAB_DEPTH_CAPTURE_HZ:-25.0}"
-  export MJLAB_DEPTH_HEIGHT="${MJLAB_DEPTH_HEIGHT:-28}"
-  export MJLAB_DEPTH_WIDTH="${MJLAB_DEPTH_WIDTH:-48}"
+  export MJLAB_DEPTH_CAPTURE_HZ="${MJLAB_DEPTH_CAPTURE_HZ:-30.0}"
+  export MJLAB_DEPTH_HEIGHT="${MJLAB_DEPTH_HEIGHT:-480}"
+  export MJLAB_DEPTH_WIDTH="${MJLAB_DEPTH_WIDTH:-848}"
   export MJLAB_DEPTH_MAX_AGE="${MJLAB_DEPTH_MAX_AGE:-0.5}"
   if uses_npy_depth; then
     export MJLAB_DEPTH_NPY_PATH="${MJLAB_DEPTH_NPY_PATH:-${DEPTH_FRAME_PATH}}"
@@ -273,6 +276,7 @@ fi
 
 echo "ROBOT_TYPE=${ROBOT_TYPE}"
 echo "RL_TYPE=${RL_TYPE}"
+echo "MJLAB_SCENE=${MJLAB_SCENE}"
 echo "ROBOT_IP=${ROBOT_IP}"
 echo "SIM_START_DELAY=${SIM_START_DELAY}"
 echo "CTRL_START_DELAY=${CTRL_START_DELAY}"

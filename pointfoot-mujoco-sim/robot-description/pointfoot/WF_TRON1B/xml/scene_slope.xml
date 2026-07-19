@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mujoco model="WF_TRON1B_terrain">
+  <include file="robot.xml" />
+  <asset />
+  <worldbody>
+    <geom pos="3.2 0.0 0.1" type="box" size="0.6 0.75 0.02" quat="0.9982005399352042 0.0 -0.059964006479444595 0.0" group="0" rgba="0.72 0.52 0.30 1" contype="1" conaffinity="1" condim="3" friction="0.6 0.005 0.0001" />
+  </worldbody>
+</mujoco>

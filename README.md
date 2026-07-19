@@ -16,6 +16,45 @@ cd wf_tron1b_deploy
 sudo -E IMAGE_NAME=tron_sim2sim:latest scripts/docker_build_ros1.sh
 ```
 
+### NVIDIA GPU prerequisite (Ubuntu/Debian host)
+
+The ROS1 Docker workflow uses the host GPU for MuJoCo rendering. Before creating
+`tron_deploy`, Docker must be able to access a working NVIDIA driver (`nvidia-smi`
+must succeed on the host) and the NVIDIA Container Toolkit must be installed and
+configured. Docker itself and an NVIDIA GPU driver are host prerequisites; a CUDA
+toolkit installation is not required.
+
+Install and configure the toolkit using NVIDIA's production repository:
+
+```bash
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+  sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+If `tron_deploy` was created before this setup, remove and recreate that persistent
+container so it receives the GPU runtime configuration:
+
+```bash
+sudo docker rm -f tron_deploy
+```
+
+After starting the container below, verify GPU access with:
+
+```bash
+sudo docker exec tron_deploy nvidia-smi
+```
+
+If Docker reports `failed to discover GPU vendor from CDI`, re-check that host
+`nvidia-smi` works, rerun `nvidia-ctk runtime configure --runtime=docker`, restart
+Docker, then recreate `tron_deploy`.
+
 
 启动持久 Docker 容器：
 

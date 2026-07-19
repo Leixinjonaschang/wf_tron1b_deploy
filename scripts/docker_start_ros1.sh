@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 IMAGE_NAME="${IMAGE_NAME:-tron_sim2sim:latest}"
 CONTAINER_NAME="${CONTAINER_NAME:-tron_deploy}"
+NVIDIA_GPU="${NVIDIA_GPU:-all}"
 
 if docker container inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
   if [[ "$(docker inspect -f '{{.State.Running}}' "${CONTAINER_NAME}")" == "true" ]]; then
@@ -32,10 +33,18 @@ if [[ -e /dev/dri ]]; then
   DOCKER_DEVICES=(--device /dev/dri)
 fi
 
+DOCKER_GPU_ARGS=()
+if [[ "${NVIDIA_GPU}" != "0" && "${NVIDIA_GPU}" != "none" ]]; then
+  DOCKER_GPU_ARGS=(--gpus "${NVIDIA_GPU}")
+fi
+
 docker run -d \
   --name "${CONTAINER_NAME}" \
   --network host \
+  "${DOCKER_GPU_ARGS[@]}" \
   -e DISPLAY="${DISPLAY:-}" \
+  -e NVIDIA_VISIBLE_DEVICES="${NVIDIA_VISIBLE_DEVICES:-all}" \
+  -e NVIDIA_DRIVER_CAPABILITIES="${NVIDIA_DRIVER_CAPABILITIES:-graphics,compute,utility}" \
   -e XAUTHORITY=/tmp/.docker.xauth \
   -e ROBOT_TYPE="${ROBOT_TYPE:-WF_TRON1B}" \
   -e RL_TYPE="${RL_TYPE:-mjlab_repts_lin_depth}" \
@@ -63,4 +72,5 @@ docker run -d \
   bash -lc 'source /opt/conda/etc/profile.d/conda.sh && set +u && conda activate sim && set -u && cd /work && sleep infinity'
 
 echo "Started container: ${CONTAINER_NAME}"
+echo "NVIDIA GPU request: ${NVIDIA_GPU}"
 echo "Enter with: docker exec -it ${CONTAINER_NAME} bash"

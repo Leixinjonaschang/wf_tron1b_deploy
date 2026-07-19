@@ -44,7 +44,6 @@ _TURBO_STOPS = np.array(
     dtype=np.float32,
 )
 
-
 @dataclass
 class DepthViewerConfig:
     source: str = "ros"

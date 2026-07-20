@@ -16,6 +16,7 @@ DEPLOY_ROOT = REPO_ROOT / "rl-deploy-with-python"
 sys.path.insert(0, str(DEPLOY_ROOT))
 
 from mjlab_repts_lin_depth import (
+    D435_LEFT_CROP_FRACTION,
     D435_RAW_DEPTH_HEIGHT,
     D435_RAW_DEPTH_WIDTH,
     _resolve_ros_type,
@@ -28,6 +29,8 @@ DEFAULT_MIN_DEPTH = 0.0
 DEFAULT_MAX_DEPTH = 10.0
 DEFAULT_SCALE = 1
 DEFAULT_REFRESH_HZ = 30.0
+DEFAULT_GRADCAM_ALPHA = 0.45
+DEFAULT_GRADCAM_MAX_AGE_S = 1.0
 DEFAULT_WINDOW_HEIGHT = D435_RAW_DEPTH_HEIGHT
 DEFAULT_WINDOW_WIDTH = D435_RAW_DEPTH_WIDTH
 
@@ -57,6 +60,54 @@ class DepthViewerConfig:
     scale: int = DEFAULT_SCALE
     refresh_hz: float = DEFAULT_REFRESH_HZ
     colormap: str = "turbo"
+    gradcam_path: str | None = None
+    gradcam_alpha: float = DEFAULT_GRADCAM_ALPHA
+
+
+class GradCamFileSource:
+    """Best-effort reader for atomically-published asynchronous Grad-CAM files."""
+
+    def __init__(self, path: str):
+        self._path = Path(path)
+        self._mtime_ns: int | None = None
+        self._cam: np.ndarray | None = None
+        self._source_time_s: float | None = None
+        self._target = "unknown"
+        self._frame_count = 0
+        self._fps = 0.0
+        self._last_update_s: float | None = None
+
+    def latest(self) -> tuple[np.ndarray | None, float | None, str, int, float]:
+        try:
+            stat = self._path.stat()
+        except OSError:
+            return self._snapshot()
+        if stat.st_mtime_ns == self._mtime_ns:
+            return self._snapshot()
+        try:
+            with np.load(self._path, allow_pickle=False) as payload:
+                cam = np.asarray(payload["cam"], dtype=np.float32)
+                source_time_s = float(np.asarray(payload["source_time_s"]).item())
+                target = str(np.asarray(payload["target"]).item())
+            if cam.shape != (30, 45) or not np.isfinite(cam).all() or (cam < 0.0).any():
+                return self._snapshot()
+        except (KeyError, OSError, ValueError):
+            return self._snapshot()
+        now = time.time()
+        if self._last_update_s is not None:
+            instant_fps = 1.0 / max(now - self._last_update_s, 1.0e-6)
+            self._fps = instant_fps if self._fps <= 0.0 else 0.9 * self._fps + 0.1 * instant_fps
+        self._cam = cam.copy()
+        self._source_time_s = source_time_s
+        self._target = target
+        self._mtime_ns = stat.st_mtime_ns
+        self._last_update_s = now
+        self._frame_count += 1
+        return self._snapshot()
+
+    def _snapshot(self) -> tuple[np.ndarray | None, float | None, str, int, float]:
+        cam = None if self._cam is None else self._cam.copy()
+        return cam, self._source_time_s, self._target, self._frame_count, self._fps
 
 
 class _BufferedRosDepthImageSubscriber:
@@ -224,6 +275,8 @@ def config_from_env() -> DepthViewerConfig:
         scale=max(1, _env_int("MJLAB_DEPTH_VIEW_SCALE", DEFAULT_SCALE)),
         refresh_hz=max(1.0, _env_float("MJLAB_DEPTH_VIEW_HZ", DEFAULT_REFRESH_HZ)),
         colormap=os.getenv("MJLAB_DEPTH_VIEW_COLORMAP", "turbo").lower(),
+        gradcam_path=os.getenv("MJLAB_DEPTH_GRADCAM_PATH") or None,
+        gradcam_alpha=float(np.clip(_env_float("MJLAB_DEPTH_GRADCAM_ALPHA", DEFAULT_GRADCAM_ALPHA), 0.0, 1.0)),
     )
 
 
@@ -270,10 +323,52 @@ def _turbo_colorize(normalized: np.ndarray) -> np.ndarray:
     return np.clip(rgb, 0, 255).astype(np.uint8)
 
 
+def _resize_bilinear(image: np.ndarray, height: int, width: int) -> np.ndarray:
+    """Small dependency-free bilinear resize for the 30x45 CAM grid."""
+
+    if image.shape == (height, width):
+        return image.astype(np.float32, copy=False)
+    rows = np.linspace(0.0, image.shape[0] - 1, height, dtype=np.float32)
+    cols = np.linspace(0.0, image.shape[1] - 1, width, dtype=np.float32)
+    low_rows = np.floor(rows).astype(np.intp)
+    low_cols = np.floor(cols).astype(np.intp)
+    high_rows = np.minimum(low_rows + 1, image.shape[0] - 1)
+    high_cols = np.minimum(low_cols + 1, image.shape[1] - 1)
+    row_weight = (rows - low_rows)[:, None]
+    col_weight = (cols - low_cols)[None, :]
+    top = image[low_rows[:, None], low_cols[None, :]] * (1.0 - col_weight) + image[
+        low_rows[:, None], high_cols[None, :]
+    ] * col_weight
+    bottom = image[high_rows[:, None], low_cols[None, :]] * (1.0 - col_weight) + image[
+        high_rows[:, None], high_cols[None, :]
+    ] * col_weight
+    return (top * (1.0 - row_weight) + bottom * row_weight).astype(np.float32, copy=False)
+
+
+def overlay_gradcam(depth_rgb: np.ndarray, cam: np.ndarray, alpha: float) -> np.ndarray:
+    """Overlay CAM only over the D435 FOV retained by policy preprocessing."""
+
+    rgb = np.asarray(depth_rgb, dtype=np.uint8).copy()
+    if rgb.ndim != 3 or rgb.shape[-1] != 3:
+        raise ValueError(f"depth_rgb must have shape [H, W, 3], got {rgb.shape}")
+    if cam.shape != (30, 45):
+        raise ValueError(f"Grad-CAM must have shape (30, 45), got {cam.shape}")
+    left_crop = int(round(rgb.shape[1] * D435_LEFT_CROP_FRACTION))
+    if left_crop >= rgb.shape[1]:
+        return rgb
+    heat = np.clip(_resize_bilinear(cam, rgb.shape[0], rgb.shape[1] - left_crop), 0.0, 1.0)
+    heat_rgb = np.stack((np.full_like(heat, 255.0), heat * 255.0, np.zeros_like(heat)), axis=-1)
+    blend = np.float32(np.clip(alpha, 0.0, 1.0)) * heat[..., None]
+    visible = rgb[:, left_crop:].astype(np.float32)
+    rgb[:, left_crop:] = np.clip(visible * (1.0 - blend) + heat_rgb * blend, 0, 255).astype(np.uint8)
+    return rgb
+
+
 def run_viewer(cfg: DepthViewerConfig) -> None:
     import pygame
 
     depth_source = create_depth_image_source(cfg)
+    gradcam_source = GradCamFileSource(cfg.gradcam_path) if cfg.gradcam_path else None
     pygame.init()
     clock = pygame.time.Clock()
     screen_shape = (
@@ -311,6 +406,17 @@ def run_viewer(cfg: DepthViewerConfig) -> None:
                 max_depth=cfg.max_depth,
                 colormap=cfg.colormap,
             )
+            cam_status = "off"
+            if gradcam_source is not None:
+                cam, cam_source_time_s, target, _cam_count, cam_fps = gradcam_source.latest()
+                cam_age_s = float("inf") if cam_source_time_s is None else time.time() - cam_source_time_s
+                if cam is not None and cam_age_s <= DEFAULT_GRADCAM_MAX_AGE_S:
+                    rgb = overlay_gradcam(rgb, cam, cfg.gradcam_alpha)
+                    cam_status = f"{target} | {cam_fps:.1f} Hz | age {cam_age_s * 1000.0:.0f} ms"
+                elif cam is None:
+                    cam_status = "waiting"
+                else:
+                    cam_status = f"stale | age {cam_age_s * 1000.0:.0f} ms"
             surface = pygame.surfarray.make_surface(np.transpose(rgb, (1, 0, 2)))
             if cfg.scale != 1:
                 surface = pygame.transform.scale(surface, target_shape)
@@ -320,7 +426,8 @@ def run_viewer(cfg: DepthViewerConfig) -> None:
             age_s = 0.0 if recv_time_s is None else time.time() - recv_time_s
             pygame.display.set_caption(
                 f"Depth {_source_label(cfg)} | {width}x{height} | "
-                f"{fps:.1f} fps | age {age_s * 1000.0:.0f} ms | frame {frame_count}"
+                f"{fps:.1f} fps | age {age_s * 1000.0:.0f} ms | frame {frame_count} | "
+                f"CAM {cam_status}"
             )
             clock.tick(cfg.refresh_hz)
     finally:

@@ -22,6 +22,7 @@ JOYSTICK="${SIM_DIR}/robot-joystick/robot-joystick"
 MODEL_XML="${SIM_DIR}/robot-description/pointfoot/${ROBOT_TYPE}/xml/${MJLAB_SCENE}"
 POLICY="${CTRL_DIR}/controllers/model/${ROBOT_TYPE}/policy/${RL_TYPE}/policy.onnx"
 DEPTH_FRAME_PATH="${MJLAB_DEPTH_NPY_PATH:-${LOG_DIR}/depth_frame.npy}"
+DEPTH_GRADCAM_PATH="${MJLAB_DEPTH_GRADCAM_PATH:-${LOG_DIR}/depth_gradcam.npz}"
 
 PIDS=()
 PYTHON_CMD=()
@@ -71,6 +72,7 @@ setup_python_cmd() {
     --with pyyaml
     --with mujoco
     --with pygame
+    --with 'torch==2.7.1+cpu' --index https://download.pytorch.org/whl/cpu
     --with "${LIMXSDK_WHL}"
     python
   )
@@ -261,6 +263,10 @@ if [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]]; then
   export MJLAB_DEPTH_HEIGHT="${MJLAB_DEPTH_HEIGHT:-480}"
   export MJLAB_DEPTH_WIDTH="${MJLAB_DEPTH_WIDTH:-848}"
   export MJLAB_DEPTH_MAX_AGE="${MJLAB_DEPTH_MAX_AGE:-0.5}"
+  export MJLAB_DEPTH_GRADCAM="${MJLAB_DEPTH_GRADCAM:-0}"
+  export MJLAB_DEPTH_GRADCAM_HZ="${MJLAB_DEPTH_GRADCAM_HZ:-5.0}"
+  export MJLAB_DEPTH_GRADCAM_PATH="${DEPTH_GRADCAM_PATH}"
+  export MJLAB_DEPTH_GRADCAM_ALPHA="${MJLAB_DEPTH_GRADCAM_ALPHA:-0.45}"
   if uses_npy_depth; then
     export MJLAB_DEPTH_NPY_PATH="${MJLAB_DEPTH_NPY_PATH:-${DEPTH_FRAME_PATH}}"
   fi
@@ -290,6 +296,9 @@ if [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]]; then
   echo "MJLAB_DEPTH_ROS_TOPIC=${MJLAB_DEPTH_ROS_TOPIC}"
   echo "MJLAB_DEPTH_MAX_AGE=${MJLAB_DEPTH_MAX_AGE}"
   echo "MJLAB_DEPTH_VIEW=${MJLAB_DEPTH_VIEW:-auto}"
+  echo "MJLAB_DEPTH_GRADCAM=${MJLAB_DEPTH_GRADCAM}"
+  echo "MJLAB_DEPTH_GRADCAM_HZ=${MJLAB_DEPTH_GRADCAM_HZ}"
+  echo "MJLAB_DEPTH_GRADCAM_PATH=${MJLAB_DEPTH_GRADCAM_PATH}"
   if uses_npy_depth; then
     echo "MJLAB_DEPTH_NPY_PATH=${MJLAB_DEPTH_NPY_PATH}"
   fi

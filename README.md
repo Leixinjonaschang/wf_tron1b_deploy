@@ -16,6 +16,14 @@ cd wf_tron1b_deploy
 sudo -E IMAGE_NAME=tron_sim2sim:latest scripts/docker_build_ros1.sh
 ```
 
+`IMAGE_NAME=tron_sim2sim:latest` sets the Docker image tag used by the helper
+script. It is optional because that is already the default; use a different
+tag only when keeping multiple image versions. `sudo` runs the Docker command
+with administrator privileges and `-E` preserves the caller's environment
+(notably `DISPLAY`, proxy settings, and explicitly supplied variables). The
+same command can therefore be written more simply as `sudo scripts/docker_build_ros1.sh`
+when the defaults are sufficient.
+
 ### NVIDIA GPU prerequisite (Ubuntu/Debian host)
 
 The ROS1 Docker workflow uses the host GPU for MuJoCo rendering. Before creating
@@ -87,6 +95,34 @@ depth topic 是：
 ```bash
 MJLAB_DEPTH_VIEW=0 /work/scripts/docker_run_sim2sim_ros1.sh
 ```
+
+### Optional Grad-CAM Overlay
+
+Grad-CAM is disabled by default, so existing images and launch commands keep
+their original ONNX-only control behavior. To enable the visual overlay, first
+rebuild the image after pulling these changes: it now includes the CPU PyTorch
+runtime used only by the background explanation worker. A persistent container
+created from an old image must be recreated after the rebuild:
+
+```bash
+# Host
+sudo scripts/docker_build_ros1.sh
+sudo docker rm -f tron_deploy
+xhost +local:docker
+sudo -E scripts/docker_start_ros1.sh
+```
+
+Then, inside the recreated container, start sim2sim with the feature enabled:
+
+```bash
+MJLAB_DEPTH_GRADCAM=1 MJLAB_DEPTH_GRADCAM_HZ=5.0 MJLAB_DEPTH_VIEW=1 \
+  /work/scripts/docker_run_sim2sim_ros1.sh
+```
+
+The worker writes `depth_gradcam.npz` to `/work/logs/sim2sim/` by default. The
+viewer displays only CAM frames no older than one second, over the policy's
+retained D435 field of view. `MJLAB_DEPTH_GRADCAM_ALPHA` controls opacity
+(default `0.45`), and `MJLAB_DEPTH_GRADCAM_PATH` overrides the output path.
 
 日志：
 

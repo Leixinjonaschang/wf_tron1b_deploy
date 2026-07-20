@@ -42,6 +42,7 @@ from mjlab_repts_lin_depth import (
     create_depth_frame_source,
     validate_depth_policy_interface,
 )
+from depth_gradcam import create_depth_gradcam_worker
 
 class WheelfootController:
     def __init__(self, model_dir, robot, robot_type, rl_type, start_controller):
@@ -202,6 +203,9 @@ class WheelfootController:
             self.encoder_output_names = []
             self.encoder_input_shapes = []
             self.encoder_output_shapes = []
+            self.depth_gradcam_worker = create_depth_gradcam_worker(
+                self.model_policy, self.policy_session
+            )
             return
 
         self.encoder_session = ort.InferenceSession(self.model_encoder, sess_options=session_options, providers=cpu_providers)
@@ -286,6 +290,7 @@ class WheelfootController:
             observation_noise_cfg.get('seed')
         )
         self.depth_source = None
+        self.depth_gradcam_worker = None
         self.depth_hidden_state = np.zeros(LIN_DEPTH_HIDDEN_STATE_SHAPE, dtype=np.float32)
         self.predicted_lin_vel = np.zeros(3, dtype=np.float32)
         if self.is_mjlab_repts_lin_depth:
@@ -351,6 +356,8 @@ class WheelfootController:
         self.robot_cmd.Kp = [0. for x in range(0, self.joint_num)]
         self.robot_cmd.Kd = [1.0 for x in range(0, self.joint_num)]
         self.robot.publishRobotCmd(self.robot_cmd)
+        if self.depth_gradcam_worker is not None:
+            self.depth_gradcam_worker.close()
         time.sleep(1)
 
     # Handle the stand mode for smoothly transitioning the robot into standing
@@ -678,6 +685,10 @@ class WheelfootController:
             actor_command = self.commands.astype(np.float32).reshape(1, 3)
             depth = self.depth_source.frame().astype(np.float32)
             hidden_state = self.depth_hidden_state.astype(np.float32)
+            if self.depth_gradcam_worker is not None:
+                self.depth_gradcam_worker.submit(
+                    proprio_history, actor_command, depth, hidden_state
+                )
             inputs = {
                 self.policy_input_names[0]: proprio_history,
                 self.policy_input_names[1]: actor_command,

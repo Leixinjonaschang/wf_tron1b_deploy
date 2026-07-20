@@ -641,8 +641,13 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
 
     def test_controller_branch_loads_depth_policy_without_encoder(self):
         wheelfoot_module = _import_wheelfoot_module()
+        gradcam_worker = mock.Mock()
 
-        with mock.patch.object(wheelfoot_module.ort, "InferenceSession", FakePolicySession):
+        with mock.patch.object(wheelfoot_module.ort, "InferenceSession", FakePolicySession), mock.patch.object(
+            wheelfoot_module,
+            "create_depth_gradcam_worker",
+            return_value=gradcam_worker,
+        ) as create_worker:
             env = {"MJLAB_DEPTH_SOURCE": "zero"}
             with mock.patch.dict(os.environ, env, clear=False):
                 controller = wheelfoot_module.WheelfootController(
@@ -658,6 +663,8 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         self.assertIsNone(controller.encoder_session)
         self.assertEqual(controller.policy_input_names, POLICY_INPUT_NAMES)
         self.assertEqual(controller.proprio_history_vector.shape, PROPRIO_HISTORY_SHAPE)
+        self.assertIs(controller.depth_gradcam_worker, gradcam_worker)
+        create_worker.assert_called_once_with(controller.model_policy, controller.policy_session)
 
     def test_controller_depth_walk_step_updates_hidden_state(self):
         wheelfoot_module = _import_wheelfoot_module()

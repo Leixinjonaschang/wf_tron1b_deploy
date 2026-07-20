@@ -45,6 +45,8 @@ RUN python -m pip install --no-cache-dir \
       onnxruntime==1.27.0 \
       numpy==1.26.3 \
       scipy==1.15.3 \
+      --extra-index-url https://download.pytorch.org/whl/cpu \
+      torch==2.7.1+cpu \
       pyyaml==6.0.3 \
       pygame==2.6.1 \
       pandas==3.0.3 \
@@ -78,7 +80,7 @@ RUN source /opt/conda/etc/profile.d/conda.sh && \
       wait "${ros_pid}" 2>/dev/null || true; \
       exit "${status}"; \
     ) && \
-    python -c "import rospy, sensor_msgs.msg, cv_bridge, mujoco, onnxruntime, scipy, limxsdk; print('ok')"
+    python -c "import rospy, sensor_msgs.msg, cv_bridge, mujoco, onnxruntime, scipy, torch, limxsdk; print('ok')"
 
 # Auto-activate the env in interactive shells too.
 RUN echo "source /opt/conda/etc/profile.d/conda.sh && conda activate sim" >> /root/.bashrc

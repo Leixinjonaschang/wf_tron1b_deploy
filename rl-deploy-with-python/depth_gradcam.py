@@ -18,7 +18,7 @@ from typing import Any
 import numpy as np
 
 
-DEFAULT_HZ = 5.0
+DEFAULT_HZ = 10.0
 DEFAULT_ALPHA = 0.45
 TARGET_NAME = "actions_l2"
 
@@ -276,13 +276,13 @@ class DepthGradCamWorker:
         return item
 
     def _run(self) -> None:
-        next_allowed = 0.0
+        next_due = 0.0
         while not self._stop.is_set():
             self._event.wait(timeout=0.1)
             self._event.clear()
             if self._stop.is_set():
                 return
-            delay = next_allowed - time.monotonic()
+            delay = next_due - time.monotonic()
             if delay > 0.0:
                 if self._stop.wait(delay):
                     return
@@ -294,7 +294,10 @@ class DepthGradCamWorker:
                 self._publish(cam, item.source_time_s)
             except Exception as exc:  # Explanation failures must never affect control.
                 print(f"[mjlab_repts_lin_depth] Grad-CAM worker error: {exc}")
-            next_allowed = time.monotonic() + self._period_s
+            # Keep a fixed maximum cadence. If Grad-CAM itself takes longer
+            # than a period, immediately use the newest queued frame instead
+            # of adding another full-period delay.
+            next_due = max(next_due + self._period_s, time.monotonic())
 
     def _publish(self, cam: np.ndarray, source_time_s: float) -> None:
         self._output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -345,22 +345,32 @@ def _resize_bilinear(image: np.ndarray, height: int, width: int) -> np.ndarray:
     return (top * (1.0 - row_weight) + bottom * row_weight).astype(np.float32, copy=False)
 
 
+def crop_to_policy_fov(depth_m: np.ndarray) -> np.ndarray:
+    """Return the camera columns retained by depth-policy preprocessing."""
+
+    depth = np.asarray(depth_m)
+    if depth.ndim != 2:
+        raise ValueError(f"depth image must be 2D, got {depth.shape}")
+    left_crop = int(round(depth.shape[1] * D435_LEFT_CROP_FRACTION))
+    if left_crop >= depth.shape[1]:
+        raise ValueError("policy crop leaves no depth columns")
+    return depth[:, left_crop:]
+
+
 def overlay_gradcam(depth_rgb: np.ndarray, cam: np.ndarray, alpha: float) -> np.ndarray:
-    """Overlay CAM only over the D435 FOV retained by policy preprocessing."""
+    """Overlay CAM on an RGB image already cropped to the policy FOV."""
 
     rgb = np.asarray(depth_rgb, dtype=np.uint8).copy()
     if rgb.ndim != 3 or rgb.shape[-1] != 3:
         raise ValueError(f"depth_rgb must have shape [H, W, 3], got {rgb.shape}")
     if cam.shape != (30, 45):
         raise ValueError(f"Grad-CAM must have shape (30, 45), got {cam.shape}")
-    left_crop = int(round(rgb.shape[1] * D435_LEFT_CROP_FRACTION))
-    if left_crop >= rgb.shape[1]:
-        return rgb
-    heat = np.clip(_resize_bilinear(cam, rgb.shape[0], rgb.shape[1] - left_crop), 0.0, 1.0)
+    heat = np.clip(_resize_bilinear(cam, rgb.shape[0], rgb.shape[1]), 0.0, 1.0)
     heat_rgb = np.stack((np.full_like(heat, 255.0), heat * 255.0, np.zeros_like(heat)), axis=-1)
     blend = np.float32(np.clip(alpha, 0.0, 1.0)) * heat[..., None]
-    visible = rgb[:, left_crop:].astype(np.float32)
-    rgb[:, left_crop:] = np.clip(visible * (1.0 - blend) + heat_rgb * blend, 0, 255).astype(np.uint8)
+    rgb[:] = np.clip(
+        rgb.astype(np.float32) * (1.0 - blend) + heat_rgb * blend, 0, 255
+    ).astype(np.uint8)
     return rgb
 
 
@@ -394,6 +404,7 @@ def run_viewer(cfg: DepthViewerConfig) -> None:
                 clock.tick(cfg.refresh_hz)
                 continue
 
+            depth_m = crop_to_policy_fov(depth_m)
             height, width = depth_m.shape
             target_shape = (width * cfg.scale, height * cfg.scale)
             if screen_shape != target_shape:

@@ -47,15 +47,28 @@ class DepthGradCamConfigTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"MJLAB_DEPTH_GRADCAM": "0"}, clear=True):
             self.assertIsNone(DepthGradCamConfig.from_env(POLICY_ONNX))
 
+    def test_gradcam_defaults_to_ten_hz(self):
+        with mock.patch.dict(os.environ, {"MJLAB_DEPTH_GRADCAM": "1"}, clear=True):
+            self.assertEqual(DepthGradCamConfig.from_env(POLICY_ONNX).hz, 10.0)
+
     def test_viewer_crop_alignment_and_alpha_blending(self):
         viewer = _viewer_module()
-        depth = np.zeros((4, 8, 3), dtype=np.uint8)
+        raw_depth = np.arange(4 * 8, dtype=np.float32).reshape(4, 8)
+        cropped_depth = viewer.crop_to_policy_fov(raw_depth)
+        self.assertEqual(cropped_depth.shape, (4, 7))
+        np.testing.assert_array_equal(cropped_depth, raw_depth[:, 1:])
+
+        depth = np.zeros((4, 7, 3), dtype=np.uint8)
         cam = np.ones((30, 45), dtype=np.float32)
         overlay = viewer.overlay_gradcam(depth, cam, 0.5)
-        self.assertTrue(np.array_equal(overlay[:, :1], depth[:, :1]))
         self.assertTrue(
-            np.all(overlay[:, 1:] == np.array([127, 127, 0], dtype=np.uint8))
+            np.all(overlay == np.array([127, 127, 0], dtype=np.uint8))
         )
+
+    def test_viewer_crops_d435_raw_frame_to_policy_width(self):
+        viewer = _viewer_module()
+        raw_depth = np.zeros((480, 848), dtype=np.float32)
+        self.assertEqual(viewer.crop_to_policy_fov(raw_depth).shape, (480, 720))
 
     def test_gradcam_file_reader_ignores_corrupt_and_expired_inputs(self):
         viewer = _viewer_module()

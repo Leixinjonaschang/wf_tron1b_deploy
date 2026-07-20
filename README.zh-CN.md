@@ -2,14 +2,18 @@
 
 [English README](README.md)
 
-本仓库支持两种 sim2sim 流程：
+本仓库支持两种 Sim-to-Sim 流程：
 
 - 感知型深度策略：Docker + ROS1 深度图话题。
-- 非感知 REPTS 策略：直接在宿主机 `uv` 环境中运行，不需要 ROS。
+- Blind 策略：直接在宿主机 `uv` 环境中运行，不需要 ROS。
 
 ## 基于深度的感知型 Sim-to-Sim 测试
 
-用于深度策略：`mjlab_repts_lin_depth`。请按以下顺序执行。
+为了同时兼顾 Sim-to-Sim 的跨平台能力 和 Sim2Real 兼容性，Perceptive 部分 Sim-to-Sim 采用 Docker 环境。
+
+Docker 安装请参考 [https://docs.docker.com/engine/install/](https://docs.docker.com/engine/install/).
+
+LimX Dynamics TRON1 EDU 官方 Sim-to-Real Guide 请[参考](https://www.limxdynamics.com/zh/documents/799585387524788224)。
 
 ### 1. 一次性 GPU 配置
 
@@ -58,20 +62,15 @@ sudo docker exec -it tron_deploy bash
 
 该命令会启动 MuJoCo、RL 控制器、ROS1 深度图传输、深度图查看器和手柄程序。深度图话题为 `/camera/depth/image_rect_raw`。
 
-仅关闭深度图查看器：
+### 可选参数
 
-```bash
-MJLAB_DEPTH_VIEW=0 /work/scripts/docker_run_sim2sim_ros1.sh
-```
+在启动命令前设置以下常用环境变量：
 
-### Grad-CAM 叠加层
-
-通过 `MJLAB_DEPTH_GRADCAM=1` 启用深度策略的 Grad-CAM 叠加层：
-
-```bash
-MJLAB_DEPTH_GRADCAM=1 MJLAB_DEPTH_VIEW=1 \
-  /work/scripts/docker_run_sim2sim_ros1.sh
-```
+| 参数 | 说明 |
+| --- | --- |
+| `MJLAB_DEPTH_VIEW=0` | 关闭深度图查看器。 |
+| `MJLAB_DEPTH_GRADCAM=1` | 启用深度策略的 Grad-CAM 叠加层。 |
+| `MJLAB_SCENE=scene_rough_ground.xml` | 选择地形场景；默认使用平地 `robot.xml`。 |
 
 日志写入 `/work/logs/sim2sim/`。手动启动和故障排查见 [ROS1 深度图指南](doc/ros1_depth_sim2sim.md)。
 
@@ -83,11 +82,7 @@ MJLAB_DEPTH_GRADCAM=1 MJLAB_DEPTH_VIEW=1 \
 uv run python utils/terrain_tool/terrain_generator.py
 ```
 
-可用场景为 `scene_stairs.xml`、`scene_slope.xml`、`scene_rough_ground.xml`、`scene_obstacle.xml`，以及组合场景 `scene_terrain.xml`。通过 `MJLAB_SCENE` 选择场景；默认使用平地 `robot.xml`。
-
-```bash
-MJLAB_SCENE=scene_rough_ground.xml /work/scripts/docker_run_sim2sim_ros1.sh
-```
+可用场景为 `scene_stairs.xml`、`scene_slope.xml`、`scene_rough_ground.xml`、`scene_obstacle.xml`，以及组合场景 `scene_terrain.xml`。
 
 ## 非感知型 Sim-to-Sim 测试
 

@@ -2,14 +2,18 @@
 
 [中文版 README](README.zh-CN.md)
 
-This repository supports two sim2sim workflows:
+This repository supports two Sim-to-Sim workflows:
 
 - Perceptive depth policy: Docker + ROS1 depth topic.
-- Non-perceptive REPTS policy: runs directly in the host `uv` environment without ROS.
+- Blind policy: runs directly in the host `uv` environment without ROS.
 
 ## Depth-Based Perceptive Sim-to-Sim Test
 
-For the depth-based policy: `mjlab_repts_lin_depth`. Run the following steps in order.
+To balance Sim-to-Sim cross-platform support with Sim2Real compatibility, the perceptive Sim-to-Sim workflow runs in Docker.
+
+For Docker installation, see the [Docker Engine installation guide](https://docs.docker.com/engine/install/).
+
+For the LimX Dynamics TRON1 EDU Sim-to-Real workflow, see the [official guide](https://www.limxdynamics.com/zh/documents/799585387524788224).
 
 ### 1. One-time GPU setup
 
@@ -59,20 +63,15 @@ sudo docker exec -it tron_deploy bash
 
 This starts MuJoCo, the RL controller, ROS1 depth transport, the depth viewer, and the joystick. The depth topic is `/camera/depth/image_rect_raw`.
 
-Disable only the depth viewer:
+### Optional Parameters
 
-```bash
-MJLAB_DEPTH_VIEW=0 /work/scripts/docker_run_sim2sim_ros1.sh
-```
+Set these common environment variables before the launch command:
 
-### Grad-CAM Overlay
-
-Enable the depth-policy Grad-CAM overlay with `MJLAB_DEPTH_GRADCAM=1`:
-
-```bash
-MJLAB_DEPTH_GRADCAM=1 MJLAB_DEPTH_VIEW=1 \
-  /work/scripts/docker_run_sim2sim_ros1.sh
-```
+| Parameter | Description |
+| --- | --- |
+| `MJLAB_DEPTH_VIEW=0` | Disables the depth viewer. |
+| `MJLAB_DEPTH_GRADCAM=1` | Enables the Grad-CAM overlay for the depth policy. |
+| `MJLAB_SCENE=scene_rough_ground.xml` | Selects a terrain scene; the default is the flat `robot.xml`. |
 
 Logs are written to `/work/logs/sim2sim/`. See [the ROS1 depth guide](doc/ros1_depth_sim2sim.md) for manual startup and troubleshooting.
 
@@ -84,11 +83,7 @@ Generate terrain scenes after changing their definitions:
 uv run python utils/terrain_tool/terrain_generator.py
 ```
 
-Available scenes are `scene_stairs.xml`, `scene_slope.xml`, `scene_rough_ground.xml`, `scene_obstacle.xml`, and the combined `scene_terrain.xml`. Use `MJLAB_SCENE` to select one; the default is the flat `robot.xml`.
-
-```bash
-MJLAB_SCENE=scene_rough_ground.xml /work/scripts/docker_run_sim2sim_ros1.sh
-```
+Available scenes are `scene_stairs.xml`, `scene_slope.xml`, `scene_rough_ground.xml`, `scene_obstacle.xml`, and the combined `scene_terrain.xml`.
 
 ## Non-Perceptive Sim-to-Sim Test
 

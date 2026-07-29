@@ -12,6 +12,11 @@ from unittest import mock
 
 import numpy as np
 
+try:
+    import onnxruntime as ort
+except ModuleNotFoundError:
+    ort = None
+
 
 DEPLOY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(DEPLOY_ROOT))
@@ -40,6 +45,13 @@ from mjlab_repts_lin_depth import (  # noqa: E402
 
 
 MODEL_DIR = DEPLOY_ROOT / "controllers" / "model"
+POLICY_PATH = (
+    MODEL_DIR
+    / "WF_TRON1B"
+    / "policy"
+    / "mjlab_repts_lin_depth"
+    / "policy.onnx"
+)
 _WHEELFOOT_MODULE = None
 
 
@@ -334,6 +346,79 @@ class FakePolicySession:
 
 
 class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
+    def test_active_depth_policy_matches_expected_interface(self):
+        if ort is None:
+            self.skipTest("onnxruntime is required to inspect policy.onnx")
+
+        session = ort.InferenceSession(
+            str(POLICY_PATH),
+            providers=["CPUExecutionProvider"],
+        )
+        validate_depth_policy_interface(
+            [input_info.name for input_info in session.get_inputs()],
+            [input_info.shape for input_info in session.get_inputs()],
+            [output_info.name for output_info in session.get_outputs()],
+            [output_info.shape for output_info in session.get_outputs()],
+            session.get_modelmeta().custom_metadata_map,
+        )
+
+    def test_controller_uses_yaml_depth_defaults_without_optional_env(self):
+        wheelfoot_module = _import_wheelfoot_module()
+        fake_depth_source = mock.Mock()
+
+        with mock.patch.object(
+            wheelfoot_module.ort,
+            "InferenceSession",
+            FakePolicySession,
+        ):
+            with mock.patch.object(
+                wheelfoot_module,
+                "create_depth_frame_source",
+                return_value=fake_depth_source,
+            ) as create_source:
+                with mock.patch.dict(os.environ, {}, clear=True):
+                    controller = wheelfoot_module.WheelfootController(
+                        str(MODEL_DIR),
+                        FakeRobot(),
+                        "WF_TRON1B",
+                        "mjlab_repts_lin_depth",
+                        start_controller=False,
+                    )
+
+        self.assertIs(controller.depth_source, fake_depth_source)
+        create_source.assert_called_once_with(
+            {
+                "source": "ros",
+                "ros_topic": "/camera0/depth/image_rect_raw",
+                "ros_type": "ros1",
+                "encoding": None,
+                "depth_scale": None,
+                "min_depth": 0.0,
+                "max_depth": 10.0,
+                "timeout_s": 0.5,
+                "max_age_s": 0.5,
+                "npy_path": None,
+            }
+        )
+
+    def test_depth_source_env_override_remains_available(self):
+        lin_depth = importlib.import_module("mjlab_repts_lin_depth")
+
+        with mock.patch.dict(
+            os.environ,
+            {"MJLAB_DEPTH_SOURCE": "zero"},
+            clear=True,
+        ):
+            source = lin_depth.create_depth_frame_source(
+                {
+                    "source": "ros",
+                    "ros_topic": "/camera0/depth/image_rect_raw",
+                    "ros_type": "ros1",
+                }
+            )
+
+        self.assertIsInstance(source, lin_depth.ZeroDepthFrameSource)
+
     def test_resolve_ros_type_accepts_only_ros1(self):
         with mock.patch.dict(os.environ, {"ROS_TYPE": "ros1", "ROS_VERSION": "1"}, clear=True):
             self.assertEqual(_resolve_ros_type("ros1"), "ros1")

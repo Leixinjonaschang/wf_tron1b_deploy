@@ -9,6 +9,95 @@
 
 用于 depth-based policy：`mjlab_repts_lin_depth`。
 
+### 宿主机本地 ROS1 sim2sim（手动启动）
+
+以下流程在宿主机上直接运行 MuJoCo、controller 和 ROS1 depth
+transport。首先在仓库根目录同步 Python 环境：
+
+```bash
+uv sync
+```
+
+下面每一步均在独立 Bash 终端中执行，并保持前面启动的进程持续运行。
+所有 ROS 节点必须使用同一个本地 master、本机地址和 depth topic。
+
+1. 启动本地 ROS master：
+
+```bash
+cd ~/CLX/wf_tron1b_deploy
+source /opt/ros/noetic/setup.bash
+
+env -u ROS_HOSTNAME \
+  ROS_MASTER_URI=http://127.0.0.1:11311 \
+  ROS_IP=127.0.0.1 \
+  roscore
+```
+
+2. 启动 MuJoCo simulator 并发布 depth image：
+
+```bash
+cd ~/CLX/wf_tron1b_deploy
+source /opt/ros/noetic/setup.bash
+
+env -u ROS_HOSTNAME \
+  ROS_MASTER_URI=http://127.0.0.1:11311 \
+  ROS_IP=127.0.0.1 \
+  ROBOT_TYPE=WF_TRON1B \
+  RL_TYPE=mjlab_repts_lin_depth \
+  MJLAB_DEPTH_SINK=ros \
+  MJLAB_DEPTH_ROS_TOPIC=/camera/depth/image_rect_raw \
+  uv run python pointfoot-mujoco-sim/simulator.py
+```
+
+simulator 终端应显示 `sink=ros` 和
+`ros_topic=/camera/depth/image_rect_raw`。
+
+3. 确认 depth publisher 地址和帧率：
+
+```bash
+cd ~/CLX/wf_tron1b_deploy
+source /opt/ros/noetic/setup.bash
+export ROS_MASTER_URI=http://127.0.0.1:11311
+export ROS_IP=127.0.0.1
+unset ROS_HOSTNAME
+
+rostopic info /camera/depth/image_rect_raw
+rostopic hz /camera/depth/image_rect_raw
+```
+
+`rostopic info` 中的 publisher URI 应为 `http://127.0.0.1:<port>/`，
+帧率应接近 `30 Hz`。如果 publisher URI 仍为 `10.192.1.200`，说明
+simulator 启动时继承了真机调试用的 `ROS_IP`，需要停止后按第 2 步重启。
+
+4. depth topic 正常后启动 RL controller：
+
+```bash
+cd ~/CLX/wf_tron1b_deploy
+source /opt/ros/noetic/setup.bash
+
+env -u ROS_HOSTNAME \
+  ROS_MASTER_URI=http://127.0.0.1:11311 \
+  ROS_IP=127.0.0.1 \
+  ROBOT_TYPE=WF_TRON1B \
+  RL_TYPE=mjlab_repts_lin_depth \
+  MJLAB_DEPTH_SOURCE=ros \
+  MJLAB_DEPTH_ROS_TOPIC=/camera/depth/image_rect_raw \
+  uv run python rl-deploy-with-python/main.py
+```
+
+5. 启动虚拟遥控器：
+
+```bash
+cd ~/CLX/wf_tron1b_deploy
+pointfoot-mujoco-sim/robot-joystick/robot-joystick
+```
+
+如果 controller 报 `timed out waiting for ROS depth image`，先重新执行第 3 步，
+确认 simulator 仍在运行、publisher URI 可访问，且 simulator 与 controller
+使用完全相同的 topic。
+
+### Docker ROS1 sim2sim
+
 在宿主机执行, 根据 Dockerfile 构建 docker 镜像：
 
 ```bash

@@ -58,8 +58,8 @@ PointfootCfg:
 
   depth:
     source: ros
-    ros_topic: /camera/depth/image_rect_raw
-    ros_type: null
+    ros_topic: /camera0/depth/image_rect_raw
+    ros_type: ros1
     encoding: null
     depth_scale: null
     min_depth: 0.0

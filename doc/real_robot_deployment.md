@@ -54,15 +54,16 @@ ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts \
 如果使用 depth policy，需要先确认相机 depth topic 可用，再运行：
 
 ```bash
-ROS_TYPE=ros1 \
+source /opt/ros/noetic/setup.bash
 ROBOT_TYPE=WF_TRON1B \
 RL_TYPE=mjlab_repts_lin_depth \
-MJLAB_DEPTH_SOURCE=ros \
-MJLAB_DEPTH_ROS_TOPIC=/camera/depth/image_rect_raw \
 python3 rl-deploy-with-python/main.py 10.192.1.2
 ```
 
-实际 topic 以 `rostopic list` 为准；相机 depth 获取流程见 [realsense_depth.md](./realsense_depth.md)。
+`mjlab_repts_lin_depth` 默认从对应参数 YAML 读取 ROS1 depth 配置，真机
+topic 为 `/camera0/depth/image_rect_raw`。实际 topic 以 `rostopic list`
+为准；临时调试仍可通过 `MJLAB_DEPTH_*` 环境变量覆盖 YAML。相机 depth
+获取流程见 [realsense_depth.md](./realsense_depth.md)。
 
 ## Python 部署到机器人
 
@@ -88,7 +89,9 @@ export RL_TYPE=mjlab_repts
 python3 main.py 10.192.1.2
 ```
 
-如果使用 `mjlab_repts_lin_depth`，还需要 source 对应 ROS 环境并设置 `ROS_TYPE`、`MJLAB_DEPTH_SOURCE` 和 `MJLAB_DEPTH_ROS_TOPIC`。
+如果使用 `mjlab_repts_lin_depth`，需要先 source ROS1 环境，再把
+`RL_TYPE` 改为 `mjlab_repts_lin_depth`。depth source、topic、量程和超时
+默认由 `params_mjlab_repts_lin_depth.yaml` 提供，不需要重复导出对应环境变量。
 
 ## 自启动配置
 
@@ -123,9 +126,6 @@ source /opt/ros/noetic/setup.bash
 
 export ROBOT_TYPE=WF_TRON1B
 export RL_TYPE=mjlab_repts_lin_depth
-export ROS_TYPE=ros1
-export MJLAB_DEPTH_SOURCE=ros
-export MJLAB_DEPTH_ROS_TOPIC=/camera/depth/image_rect_raw
 
 while true; do
   cd /home/guest/wf_tron1b_deploy/rl-deploy-with-python

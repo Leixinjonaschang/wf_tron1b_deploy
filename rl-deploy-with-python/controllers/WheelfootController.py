@@ -33,6 +33,7 @@ from mjlab_repts import (
     _metadata_list,
 )
 from mjlab_repts_lin_depth import (
+    GRU_HIDDEN_STATE_SHAPE as GRU_LIN_DEPTH_HIDDEN_STATE_SHAPE,
     HIDDEN_STATE_SHAPE as LIN_DEPTH_HIDDEN_STATE_SHAPE,
     POLICY_ACTION_NAMES as LIN_DEPTH_POLICY_ACTION_NAMES,
     PROPRIO_HISTORY_SHAPE as LIN_DEPTH_PROPRIO_HISTORY_SHAPE,
@@ -52,15 +53,27 @@ class WheelfootController:
         self.is_mjlab_repts = self.rl_type == "mjlab_repts"
         self.is_mjlab_repts_lin = self.rl_type == "mjlab_repts_lin"
         self.is_mjlab_repts_lin_depth = self.rl_type == "mjlab_repts_lin_depth"
+        self.is_mjlab_repts_gru_lin_depth = (
+            self.rl_type == "mjlab_repts_gru_lin_depth"
+        )
+        self.is_mjlab_repts_depth = (
+            self.is_mjlab_repts_lin_depth
+            or self.is_mjlab_repts_gru_lin_depth
+        )
         self.is_mjlab_policy = (
             self.is_mjlab_repts
             or self.is_mjlab_repts_lin
-            or self.is_mjlab_repts_lin_depth
+            or self.is_mjlab_repts_depth
+        )
+        self.depth_hidden_state_shape = (
+            GRU_LIN_DEPTH_HIDDEN_STATE_SHAPE
+            if self.is_mjlab_repts_gru_lin_depth
+            else LIN_DEPTH_HIDDEN_STATE_SHAPE
         )
         self.start_controller = start_controller
 
         # Load configuration and model file paths based on robot type
-        if self.is_mjlab_repts_lin_depth:
+        if self.is_mjlab_repts_depth:
             config_name = "params_mjlab_repts_lin_depth.yaml"
         elif self.is_mjlab_repts_lin:
             config_name = "params_mjlab_repts_lin.yaml"
@@ -187,16 +200,21 @@ class WheelfootController:
             self.encoder_output_shapes = []
             return
 
-        if self.is_mjlab_repts_lin_depth:
+        if self.is_mjlab_repts_depth:
             validate_depth_policy_interface(
                 self.policy_input_names,
                 self.policy_input_shapes,
                 self.policy_output_names,
                 self.policy_output_shapes,
                 self.policy_metadata,
+                hidden_state_shape=self.depth_hidden_state_shape,
+                policy_name=self.rl_type,
             )
             self.apply_mjlab_repts_policy_metadata()
-            self.depth_hidden_state = np.zeros(LIN_DEPTH_HIDDEN_STATE_SHAPE, dtype=np.float32)
+            self.depth_hidden_state = np.zeros(
+                self.depth_hidden_state_shape,
+                dtype=np.float32,
+            )
             self.encoder_session = None
             self.encoder_input_names = []
             self.encoder_output_names = []
@@ -262,7 +280,7 @@ class WheelfootController:
         self.mjlab_repts_history = TermWiseHistory(self.obs_history_length)
         if self.is_mjlab_repts_lin:
             self.mjlab_repts_history = LinProprioHistory(self.obs_history_length)
-        elif self.is_mjlab_repts_lin_depth:
+        elif self.is_mjlab_repts_depth:
             self.mjlab_repts_history = LinDepthProprioHistory(self.obs_history_length)
         self.mjlab_repts_diagnostics_printed = False
         self.mjlab_repts_policy_initialized = False
@@ -286,9 +304,12 @@ class WheelfootController:
             observation_noise_cfg.get('seed')
         )
         self.depth_source = None
-        self.depth_hidden_state = np.zeros(LIN_DEPTH_HIDDEN_STATE_SHAPE, dtype=np.float32)
+        self.depth_hidden_state = np.zeros(
+            self.depth_hidden_state_shape,
+            dtype=np.float32,
+        )
         self.predicted_lin_vel = np.zeros(3, dtype=np.float32)
-        if self.is_mjlab_repts_lin_depth:
+        if self.is_mjlab_repts_depth:
             self.depth_source = create_depth_frame_source(config['PointfootCfg'].get('depth', {}))
 
         # Initialize variables for actions, observations, and commands
@@ -320,7 +341,7 @@ class WheelfootController:
             self.proprio_history_vector = np.zeros(STUDENT_HISTORY_SHAPE, dtype=np.float32)
         elif self.is_mjlab_repts_lin:
             self.proprio_history_vector = np.zeros(LIN_PROPRIO_HISTORY_SHAPE, dtype=np.float32)
-        elif self.is_mjlab_repts_lin_depth:
+        elif self.is_mjlab_repts_depth:
             self.proprio_history_vector = np.zeros(LIN_DEPTH_PROPRIO_HISTORY_SHAPE, dtype=np.float32)
         
         # Set initial mode to "STAND"
@@ -469,7 +490,11 @@ class WheelfootController:
             return
 
         tag = f"[{self.rl_type}]"
-        action_names = LIN_DEPTH_POLICY_ACTION_NAMES if self.is_mjlab_repts_lin_depth else POLICY_ACTION_NAMES
+        action_names = (
+            LIN_DEPTH_POLICY_ACTION_NAMES
+            if self.is_mjlab_repts_depth
+            else POLICY_ACTION_NAMES
+        )
         print(tag, "policy:", self.model_policy)
         print(tag, "inputs:", list(zip(self.policy_input_names, self.policy_input_shapes)))
         print(tag, "outputs:", list(zip(self.policy_output_names, self.policy_output_shapes)))
@@ -477,7 +502,7 @@ class WheelfootController:
         print(tag, "SDK joint order:", list(SDK_JOINT_NAMES))
         print(tag, "command range: vx_body [-1, 1], vy_body [-1, 1], yaw_rate [-pi/2, pi/2]")
         print(tag, "encoder: disabled")
-        if self.is_mjlab_repts_lin_depth:
+        if self.is_mjlab_repts_depth:
             print(tag, "depth source:", type(self.depth_source).__name__)
         if self.is_mjlab_repts_lin:
             print(tag, "predicted lin vel:", self.predicted_lin_vel)
@@ -510,7 +535,7 @@ class WheelfootController:
         base_ang_vel = np.dot(rot, base_ang_vel)
         projected_gravity = np.dot(rot, projected_gravity)
 
-        if self.is_mjlab_repts_lin_depth:
+        if self.is_mjlab_repts_depth:
             terms = build_lin_depth_proprio_terms(
                 base_ang_vel,
                 projected_gravity,
@@ -669,7 +694,7 @@ class WheelfootController:
             self.predicted_lin_vel = np.asarray(output[1], dtype=np.float32).reshape(-1)
             return
 
-        if self.is_mjlab_repts_lin_depth:
+        if self.is_mjlab_repts_depth:
             if self.depth_source is None:
                 raise RuntimeError("depth source is not initialized")
             proprio_history = self.proprio_history_vector.astype(np.float32).reshape(
@@ -688,7 +713,7 @@ class WheelfootController:
             self.actions = np.asarray(output[0], dtype=np.float32).reshape(-1)
             self.predicted_lin_vel = np.asarray(output[1], dtype=np.float32).reshape(-1)
             self.depth_hidden_state = np.asarray(output[2], dtype=np.float32).reshape(
-                LIN_DEPTH_HIDDEN_STATE_SHAPE
+                self.depth_hidden_state_shape
             )
             return
 

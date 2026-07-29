@@ -42,6 +42,8 @@ DEPTH_SHAPE = (DEPTH_CHANNELS, DEPTH_HEIGHT, DEPTH_WIDTH)
 DEPTH_INPUT_SHAPE = (1, *DEPTH_SHAPE)
 HIDDEN_STATE_SIZE = 64
 HIDDEN_STATE_SHAPE = (1, HIDDEN_STATE_SIZE)
+GRU_HIDDEN_STATE_SIZE = 128
+GRU_HIDDEN_STATE_SHAPE = (1, GRU_HIDDEN_STATE_SIZE)
 
 POLICY_INPUT_NAMES = [
     "proprio_history",
@@ -517,27 +519,52 @@ def validate_depth_policy_interface(
     output_names: list[str],
     output_shapes: list[list[int]],
     metadata: dict[str, str] | None = None,
+    *,
+    hidden_state_shape: tuple[int, int] = HIDDEN_STATE_SHAPE,
+    policy_name: str = "mjlab_repts_lin_depth",
 ) -> None:
+    if (
+        len(hidden_state_shape) != 2
+        or hidden_state_shape[0] != 1
+        or hidden_state_shape[1] <= 0
+    ):
+        raise ValueError(
+            f"{policy_name} hidden_state_shape must be (1, positive_size), "
+            f"got {hidden_state_shape}"
+        )
+
     expected_input_shapes = [
         [1, *PROPRIO_HISTORY_SHAPE],
         [1, 3],
         [1, *DEPTH_SHAPE],
-        list(HIDDEN_STATE_SHAPE),
+        list(hidden_state_shape),
     ]
-    expected_output_shapes = [[1, 8], [1, 3], list(HIDDEN_STATE_SHAPE)]
+    expected_output_shapes = [[1, 8], [1, 3], list(hidden_state_shape)]
 
     if input_names != POLICY_INPUT_NAMES:
-        raise ValueError(f"mjlab_repts_lin_depth ONNX inputs must be {POLICY_INPUT_NAMES}, got {input_names}")
-    if any(not _shape_matches(actual, expected) for actual, expected in zip(input_shapes, expected_input_shapes)):
         raise ValueError(
-            f"mjlab_repts_lin_depth ONNX input shapes must be "
+            f"{policy_name} ONNX inputs must be {POLICY_INPUT_NAMES}, got {input_names}"
+        )
+    input_shapes_match = all(
+        _shape_matches(actual, expected)
+        for actual, expected in zip(input_shapes, expected_input_shapes)
+    )
+    if not input_shapes_match:
+        raise ValueError(
+            f"{policy_name} ONNX input shapes must be "
             f"{expected_input_shapes}, got {input_shapes}"
         )
     if output_names != POLICY_OUTPUT_NAMES:
-        raise ValueError(f"mjlab_repts_lin_depth ONNX outputs must be {POLICY_OUTPUT_NAMES}, got {output_names}")
-    if any(not _shape_matches(actual, expected) for actual, expected in zip(output_shapes, expected_output_shapes)):
         raise ValueError(
-            f"mjlab_repts_lin_depth ONNX output shapes must be "
+            f"{policy_name} ONNX outputs must be {POLICY_OUTPUT_NAMES}, got {output_names}"
+        )
+    output_shapes_match = all(
+        _shape_matches(actual, expected)
+        for actual, expected in zip(output_shapes, expected_output_shapes)
+    )
+    if not output_shapes_match:
+        raise ValueError(
+            f"{policy_name} ONNX output shapes must be "
             f"{expected_output_shapes}, got {output_shapes}"
         )
 
@@ -547,14 +574,14 @@ def validate_depth_policy_interface(
     student_observation_names = _metadata_list(metadata, "student_observation_names")
     if student_observation_names is not None and student_observation_names != list(PROPRIO_TERM_ORDER):
         raise ValueError(
-            f"mjlab_repts_lin_depth ONNX metadata student_observation_names must be "
+            f"{policy_name} ONNX metadata student_observation_names must be "
             f"{list(PROPRIO_TERM_ORDER)}, got {student_observation_names}"
         )
 
     command_observation_names = _metadata_list(metadata, "command_observation_names")
     if command_observation_names is not None and command_observation_names != ["command"]:
         raise ValueError(
-            "mjlab_repts_lin_depth ONNX metadata command_observation_names must be "
+            f"{policy_name} ONNX metadata command_observation_names must be "
             f"['command'], got {command_observation_names}"
         )
 
@@ -566,42 +593,46 @@ def validate_depth_policy_interface(
         and policy_input_names != legacy_metadata_input_names
     ):
         raise ValueError(
-            f"mjlab_repts_lin_depth ONNX metadata policy_input_names must be "
+            f"{policy_name} ONNX metadata policy_input_names must be "
             f"{POLICY_INPUT_NAMES} or legacy {legacy_metadata_input_names}, got {policy_input_names}"
         )
 
     policy_output_names = _metadata_list(metadata, "policy_output_names")
-    if policy_output_names is not None and policy_output_names != POLICY_OUTPUT_NAMES[:2]:
+    if (
+        policy_output_names is not None
+        and policy_output_names != POLICY_OUTPUT_NAMES[:2]
+        and policy_output_names != POLICY_OUTPUT_NAMES
+    ):
         raise ValueError(
-            f"mjlab_repts_lin_depth ONNX metadata policy_output_names must begin with "
-            f"{POLICY_OUTPUT_NAMES[:2]}, got {policy_output_names}"
+            f"{policy_name} ONNX metadata policy_output_names must be "
+            f"{POLICY_OUTPUT_NAMES[:2]} or {POLICY_OUTPUT_NAMES}, got {policy_output_names}"
         )
 
     student_history_length = metadata.get("student_history_length")
     if student_history_length is not None and int(student_history_length) != HISTORY_LENGTH:
         raise ValueError(
-            f"mjlab_repts_lin_depth ONNX metadata student_history_length must be "
+            f"{policy_name} ONNX metadata student_history_length must be "
             f"{HISTORY_LENGTH}, got {student_history_length}"
         )
 
     flatten_history = metadata.get("student_history_flatten_dim")
     if flatten_history is not None and flatten_history.lower() != "false":
         raise ValueError(
-            "mjlab_repts_lin_depth ONNX metadata student_history_flatten_dim must be false, "
+            f"{policy_name} ONNX metadata student_history_flatten_dim must be false, "
             f"got {flatten_history}"
         )
 
     history_order = metadata.get("student_history_order")
     if history_order is not None and history_order != "oldest_to_newest":
         raise ValueError(
-            "mjlab_repts_lin_depth ONNX metadata student_history_order must be "
+            f"{policy_name} ONNX metadata student_history_order must be "
             f"oldest_to_newest, got {history_order}"
         )
 
     action_target_names = _metadata_list(metadata, "action_target_names")
     if action_target_names is not None and action_target_names != list(POLICY_ACTION_NAMES):
         raise ValueError(
-            f"mjlab_repts_lin_depth ONNX metadata action_target_names must be "
+            f"{policy_name} ONNX metadata action_target_names must be "
             f"{list(POLICY_ACTION_NAMES)}, got {action_target_names}"
         )
 
@@ -612,7 +643,7 @@ def validate_depth_policy_interface(
             action_scale, expected_action_scale
         ):
             raise ValueError(
-                f"mjlab_repts_lin_depth ONNX metadata action_scale must be "
+                f"{policy_name} ONNX metadata action_scale must be "
                 f"{list(POLICY_ACTION_SCALES)}, got {action_scale.tolist()}"
             )
 
@@ -625,6 +656,7 @@ __all__ = [
     "D435_RAW_DEPTH_HEIGHT",
     "D435_RAW_DEPTH_WIDTH",
     "DEPTH_INPUT_SHAPE",
+    "GRU_HIDDEN_STATE_SHAPE",
     "HIDDEN_STATE_SHAPE",
     "POLICY_INPUT_NAMES",
     "POLICY_OUTPUT_NAMES",

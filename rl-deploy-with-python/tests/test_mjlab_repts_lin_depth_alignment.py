@@ -27,6 +27,7 @@ from mjlab_repts_lin_depth import (  # noqa: E402
     D435_RAW_DEPTH_HEIGHT,
     D435_RAW_DEPTH_WIDTH,
     DEPTH_INPUT_SHAPE,
+    GRU_HIDDEN_STATE_SHAPE,
     HIDDEN_STATE_SHAPE,
     POLICY_INPUT_NAMES,
     POLICY_OUTPUT_NAMES,
@@ -50,6 +51,13 @@ POLICY_PATH = (
     / "WF_TRON1B"
     / "policy"
     / "mjlab_repts_lin_depth"
+    / "policy.onnx"
+)
+GRU_POLICY_PATH = (
+    MODEL_DIR
+    / "WF_TRON1B"
+    / "policy"
+    / "mjlab_repts_gru_lin_depth"
     / "policy.onnx"
 )
 _WHEELFOOT_MODULE = None
@@ -345,6 +353,40 @@ class FakePolicySession:
         ]
 
 
+class FakeGruMeta:
+    custom_metadata_map = dict(
+        FakeMeta.custom_metadata_map,
+        policy_output_names="actions,predicted_lin_vel,hidden_state_out",
+    )
+
+
+class FakeGruPolicySession(FakePolicySession):
+    def get_inputs(self):
+        inputs = super().get_inputs()
+        inputs[-1] = FakeIo("hidden_state_in", list(GRU_HIDDEN_STATE_SHAPE))
+        return inputs
+
+    def get_outputs(self):
+        outputs = super().get_outputs()
+        outputs[-1] = FakeIo("hidden_state_out", list(GRU_HIDDEN_STATE_SHAPE))
+        return outputs
+
+    def get_modelmeta(self):
+        return FakeGruMeta()
+
+    def run(self, output_names, inputs):
+        assert output_names == POLICY_OUTPUT_NAMES
+        assert inputs["proprio_history"].shape == (1, *PROPRIO_HISTORY_SHAPE)
+        assert inputs["actor_command"].shape == (1, 3)
+        assert inputs["depth"].shape == DEPTH_INPUT_SHAPE
+        assert inputs["hidden_state_in"].shape == GRU_HIDDEN_STATE_SHAPE
+        return [
+            np.full((1, 8), 0.25, dtype=np.float32),
+            np.array([[0.1, -0.2, 0.3]], dtype=np.float32),
+            inputs["hidden_state_in"] + np.float32(1.0),
+        ]
+
+
 class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
     def test_active_depth_policy_matches_expected_interface(self):
         if ort is None:
@@ -361,6 +403,35 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
             [output_info.shape for output_info in session.get_outputs()],
             session.get_modelmeta().custom_metadata_map,
         )
+
+    def test_gru_depth_policy_matches_expected_interface(self):
+        if ort is None:
+            self.skipTest("onnxruntime is required to inspect policy.onnx")
+
+        session = ort.InferenceSession(
+            str(GRU_POLICY_PATH),
+            providers=["CPUExecutionProvider"],
+        )
+        validate_depth_policy_interface(
+            [input_info.name for input_info in session.get_inputs()],
+            [input_info.shape for input_info in session.get_inputs()],
+            [output_info.name for output_info in session.get_outputs()],
+            [output_info.shape for output_info in session.get_outputs()],
+            session.get_modelmeta().custom_metadata_map,
+            hidden_state_shape=GRU_HIDDEN_STATE_SHAPE,
+            policy_name="mjlab_repts_gru_lin_depth",
+        )
+
+        inputs = {
+            input_info.name: np.zeros(input_info.shape, dtype=np.float32)
+            for input_info in session.get_inputs()
+        }
+        outputs = session.run(None, inputs)
+        self.assertEqual(
+            [output.shape for output in outputs],
+            [(1, 8), (1, 3), GRU_HIDDEN_STATE_SHAPE],
+        )
+        self.assertTrue(all(np.isfinite(output).all() for output in outputs))
 
     def test_controller_uses_yaml_depth_defaults_without_optional_env(self):
         wheelfoot_module = _import_wheelfoot_module()
@@ -724,6 +795,17 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
                 [[1, 8], [1, 3], [1, 64]],
             )
 
+    def test_validate_gru_depth_policy_rejects_mismatched_hidden_output(self):
+        with self.assertRaisesRegex(ValueError, "output shapes"):
+            validate_depth_policy_interface(
+                POLICY_INPUT_NAMES,
+                [[1, 5, 28], [1, 3], [1, 1, 30, 45], [1, 128]],
+                POLICY_OUTPUT_NAMES,
+                [[1, 8], [1, 3], [1, 64]],
+                hidden_state_shape=GRU_HIDDEN_STATE_SHAPE,
+                policy_name="mjlab_repts_gru_lin_depth",
+            )
+
     def test_controller_branch_loads_depth_policy_without_encoder(self):
         wheelfoot_module = _import_wheelfoot_module()
 
@@ -743,6 +825,44 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         self.assertIsNone(controller.encoder_session)
         self.assertEqual(controller.policy_input_names, POLICY_INPUT_NAMES)
         self.assertEqual(controller.proprio_history_vector.shape, PROPRIO_HISTORY_SHAPE)
+
+    def test_controller_gru_depth_branch_reuses_config_and_feedback_state(self):
+        wheelfoot_module = _import_wheelfoot_module()
+
+        with mock.patch.object(
+            wheelfoot_module.ort,
+            "InferenceSession",
+            FakeGruPolicySession,
+        ):
+            with mock.patch.dict(
+                os.environ,
+                {"MJLAB_DEPTH_SOURCE": "zero"},
+                clear=False,
+            ):
+                controller = wheelfoot_module.WheelfootController(
+                    str(MODEL_DIR),
+                    FakeRobot(),
+                    "WF_TRON1B",
+                    "mjlab_repts_gru_lin_depth",
+                    start_controller=False,
+                )
+
+        self.assertTrue(controller.is_mjlab_repts_gru_lin_depth)
+        self.assertTrue(controller.is_mjlab_repts_depth)
+        self.assertTrue(
+            controller.config_file.endswith("params_mjlab_repts_lin_depth.yaml")
+        )
+        self.assertIsNone(controller.model_encoder)
+        self.assertIsNone(controller.encoder_session)
+        self.assertEqual(controller.depth_hidden_state.shape, GRU_HIDDEN_STATE_SHAPE)
+        self.assertEqual(controller.proprio_history_vector.shape, PROPRIO_HISTORY_SHAPE)
+
+        controller.compute_actions()
+        controller.compute_actions()
+        np.testing.assert_allclose(
+            controller.depth_hidden_state,
+            np.full(GRU_HIDDEN_STATE_SHAPE, 2.0, dtype=np.float32),
+        )
 
     def test_controller_depth_walk_step_updates_hidden_state(self):
         wheelfoot_module = _import_wheelfoot_module()

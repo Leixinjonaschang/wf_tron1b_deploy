@@ -7,7 +7,14 @@
 
 ## Depth-Based Perceptive Sim-to-Sim Test
 
-用于 depth-based policy：`mjlab_repts_lin_depth`。
+支持两种 depth-based policy：
+
+- `mjlab_repts_lin_depth`：原 student encoder，GRU hidden state 为 `[1, 64]`。
+- `mjlab_repts_gru_lin_depth`：新 student encoder，GRU hidden state 为 `[1, 128]`。
+
+下列命令默认展示原策略；运行新策略时，将 simulator 和 controller 命令中的
+`RL_TYPE` 同时改为 `mjlab_repts_gru_lin_depth`。两种策略共用相同的 depth
+topic、裁剪、缩放和 `MJLAB_DEPTH_*` 配置。
 
 ### 宿主机本地 ROS1 sim2sim（手动启动）
 
@@ -17,6 +24,69 @@ transport。首先在仓库根目录同步 Python 环境：
 ```bash
 uv sync
 ```
+
+#### 检查和选择宿主机 GPU renderer
+
+MuJoCo 的物理仿真仍在 CPU 上运行，窗口和 depth image 使用当前桌面会话的
+OpenGL renderer。renderer 由启动终端的环境变量选择，不需要修改 Python
+代码。
+
+安装检查工具并查看当前 renderer：
+
+```bash
+sudo apt install mesa-utils
+glxinfo -B | grep -E 'OpenGL vendor|OpenGL renderer'
+```
+
+常见结果：
+
+- `AMD RENOIR`、`Mesa Intel` 或 `AMD Radeon`：使用对应的 AMD/Intel GPU。
+- `NVIDIA GeForce ...`：使用 NVIDIA GPU。
+- `llvmpipe` 或 `softpipe`：使用 CPU 软件渲染。
+
+本机显示 `AMD RENOIR` 时已经是 AMD 核显 GPU 渲染，并非 CPU 渲染。如果
+AMD 核显性能足够，可以直接按后续命令运行。
+
+对于 AMD/Intel 核显加 NVIDIA 独显的笔记本，先确认 NVIDIA 驱动正常：
+
+```bash
+nvidia-smi
+```
+
+需要临时让整个一键 sim2sim 流程使用 NVIDIA PRIME Render Offload 时，在
+同一条启动命令前加环境变量：
+
+```bash
+__NV_PRIME_RENDER_OFFLOAD=1 \
+__GLX_VENDOR_LIBRARY_NAME=nvidia \
+ROBOT_TYPE=WF_TRON1B \
+RL_TYPE=mjlab_repts_gru_lin_depth \
+scripts/start_sim2sim.sh
+```
+
+如果手动启动各进程，只需给 MuJoCo simulator 命令添加相同前缀：
+
+```bash
+__NV_PRIME_RENDER_OFFLOAD=1 \
+__GLX_VENDOR_LIBRARY_NAME=nvidia \
+ROBOT_TYPE=WF_TRON1B \
+RL_TYPE=mjlab_repts_gru_lin_depth \
+MJLAB_DEPTH_SINK=ros \
+uv run python pointfoot-mujoco-sim/simulator.py
+```
+
+启动前可验证 PRIME Offload 是否会选择 NVIDIA：
+
+```bash
+__NV_PRIME_RENDER_OFFLOAD=1 \
+__GLX_VENDOR_LIBRARY_NAME=nvidia \
+glxinfo -B | grep -E 'OpenGL vendor|OpenGL renderer'
+```
+
+预期 vendor 为 `NVIDIA Corporation`，renderer 为具体的 NVIDIA GPU。
+上述变量仅对当前命令生效，不会永久修改系统；不添加前缀即可恢复默认的
+AMD renderer。若 `nvidia-smi` 本身报错，应先修复 NVIDIA 驱动，再尝试
+PRIME Offload。
 
 下面每一步均在独立 Bash 终端中执行，并保持前面启动的进程持续运行。
 所有 ROS 节点必须使用同一个本地 master、本机地址和 depth topic。

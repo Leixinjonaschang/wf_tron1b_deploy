@@ -31,6 +31,7 @@ usage() {
 Usage:
   ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts scripts/start_sim2sim.sh
   ROS_TYPE=ros1 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth scripts/start_sim2sim.sh
+  ROS_TYPE=ros1 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_gru_lin_depth scripts/start_sim2sim.sh
 
 Defaults:
   ROBOT_TYPE=${ROBOT_TYPE}
@@ -134,18 +135,22 @@ try_start_ros_master() {
   return 1
 }
 
+is_depth_policy() {
+  [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" || "${RL_TYPE}" == "mjlab_repts_gru_lin_depth" ]]
+}
+
 uses_ros_depth() {
-  [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]] || return 1
+  is_depth_policy || return 1
   [[ "${MJLAB_DEPTH_SOURCE:-}" == "ros" || "${MJLAB_DEPTH_SINK:-}" == "ros" || "${MJLAB_DEPTH_SINK:-}" == "both" ]]
 }
 
 uses_npy_depth() {
-  [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]] || return 1
+  is_depth_policy || return 1
   [[ "${MJLAB_DEPTH_SOURCE:-}" == "npy" || "${MJLAB_DEPTH_SOURCE:-}" == "npy_live" || "${MJLAB_DEPTH_SINK:-}" == "npy" || "${MJLAB_DEPTH_SINK:-}" == "both" ]]
 }
 
 uses_depth_viewer() {
-  [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]] || return 1
+  is_depth_policy || return 1
   [[ "${MJLAB_DEPTH_VIEW:-}" != "0" ]] || return 1
   [[ "${MJLAB_DEPTH_VIEW:-}" == "1" || -n "${DISPLAY:-}" ]]
 }
@@ -252,7 +257,7 @@ export ROBOT_TYPE
 export RL_TYPE
 export MJLAB_SCENE
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
-if [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]]; then
+if is_depth_policy; then
   export ROS_TYPE="${ROS_TYPE:-ros1}"
   export MJLAB_DEPTH_SOURCE="${MJLAB_DEPTH_SOURCE:-ros}"
   export MJLAB_DEPTH_SINK="${MJLAB_DEPTH_SINK:-ros}"
@@ -281,7 +286,7 @@ echo "ROBOT_IP=${ROBOT_IP}"
 echo "SIM_START_DELAY=${SIM_START_DELAY}"
 echo "CTRL_START_DELAY=${CTRL_START_DELAY}"
 echo "PYTHON_CMD=${PYTHON_CMD[*]}"
-if [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]]; then
+if is_depth_policy; then
   echo "ROS_TYPE=${ROS_TYPE:-}"
   echo "ROS_VERSION=${ROS_VERSION:-}"
   echo "ROS_DISTRO=${ROS_DISTRO:-}"

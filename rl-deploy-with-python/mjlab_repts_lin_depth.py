@@ -40,8 +40,12 @@ DEPTH_HEIGHT = 30
 DEPTH_WIDTH = 45
 DEPTH_SHAPE = (DEPTH_CHANNELS, DEPTH_HEIGHT, DEPTH_WIDTH)
 DEPTH_INPUT_SHAPE = (1, *DEPTH_SHAPE)
+DEPTH_MIN_DISTANCE_M = 0.2
+DEPTH_MAX_DISTANCE_M = 2.0
 HIDDEN_STATE_SIZE = 64
 HIDDEN_STATE_SHAPE = (1, HIDDEN_STATE_SIZE)
+GRU_HIDDEN_STATE_SIZE = 128
+GRU_HIDDEN_STATE_SHAPE = (1, GRU_HIDDEN_STATE_SIZE)
 
 POLICY_INPUT_NAMES = [
     "proprio_history",
@@ -166,19 +170,47 @@ def _resize_nearest(image: np.ndarray, height: int, width: int) -> np.ndarray:
     return image[row_idx[:, None], col_idx[None, :]]
 
 
+def _validate_depth_range(min_depth: float, max_depth: float) -> tuple[float, float]:
+    try:
+        min_depth = float(min_depth)
+        max_depth = float(max_depth)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "depth range must satisfy 0 <= min_depth < max_depth"
+        ) from exc
+    if (
+        not np.isfinite(min_depth)
+        or not np.isfinite(max_depth)
+        or min_depth < 0.0
+        or min_depth >= max_depth
+    ):
+        raise ValueError(
+            "depth range must satisfy 0 <= min_depth < max_depth, "
+            f"got ({min_depth}, {max_depth})"
+        )
+    return min_depth, max_depth
+
+
 def preprocess_depth_image(
     image,
     *,
     encoding: str | None = None,
     target_shape: tuple[int, int] = (DEPTH_HEIGHT, DEPTH_WIDTH),
     depth_scale: float | None = None,
-    min_depth: float = 0.0,
-    max_depth: float = 10.0,
-    invalid_value: float = 0.0,
+    min_depth: float = DEPTH_MIN_DISTANCE_M,
+    max_depth: float = DEPTH_MAX_DISTANCE_M,
+    preprocess_in_onnx: bool = True,
     left_crop_fraction: float = D435_LEFT_CROP_FRACTION,
 ) -> np.ndarray:
-    """Convert a full-FOV raw depth image to ONNX input shape [1, 1, H, W]."""
+    """Convert full-FOV raw depth to finite metric ONNX input."""
 
+    if not isinstance(preprocess_in_onnx, (bool, np.bool_)):
+        raise ValueError(
+            "preprocess_in_onnx must be a boolean, "
+            f"got {preprocess_in_onnx!r}"
+        )
+    if not preprocess_in_onnx:
+        min_depth, max_depth = _validate_depth_range(min_depth, max_depth)
     depth = np.asarray(image)
     if depth.ndim == 3 and depth.shape[-1] == 1:
         depth = depth[..., 0]
@@ -198,13 +230,17 @@ def preprocess_depth_image(
             depth_scale = 1.0
 
     depth = depth.astype(np.float32) * np.float32(depth_scale)
-    depth = np.nan_to_num(
-        depth,
-        nan=invalid_value,
-        posinf=max_depth,
-        neginf=invalid_value,
-    )
-    depth = np.clip(depth, min_depth, max_depth)
+    if preprocess_in_onnx:
+        invalid = ~np.isfinite(depth) | (depth <= np.float32(0.0))
+        depth = np.where(invalid, np.float32(0.0), depth)
+    else:
+        depth = np.nan_to_num(
+            depth,
+            nan=np.float32(0.0),
+            posinf=np.float32(max_depth),
+            neginf=np.float32(0.0),
+        )
+        depth = np.clip(depth, np.float32(min_depth), np.float32(max_depth))
     left_crop = int(round(depth.shape[1] * left_crop_fraction))
     if left_crop >= depth.shape[1]:
         raise ValueError("left_crop_fraction leaves no depth columns")
@@ -224,8 +260,9 @@ class DepthSourceConfig:
     ros_type: str | None = None
     encoding: str | None = None
     depth_scale: float | None = None
-    min_depth: float = 0.0
-    max_depth: float = 10.0
+    min_depth: float = DEPTH_MIN_DISTANCE_M
+    max_depth: float = DEPTH_MAX_DISTANCE_M
+    preprocess_in_onnx: bool = True
     timeout_s: float = 0.2
     max_age_s: float = 0.5
     npy_path: str | None = None
@@ -258,6 +295,7 @@ class NpyDepthFrameSource(DepthFrameSource):
             depth_scale=cfg.depth_scale,
             min_depth=cfg.min_depth,
             max_depth=cfg.max_depth,
+            preprocess_in_onnx=cfg.preprocess_in_onnx,
         )
 
     def frame(self) -> np.ndarray:
@@ -288,6 +326,7 @@ class NpyLiveDepthFrameSource(DepthFrameSource):
                         depth_scale=self._cfg.depth_scale,
                         min_depth=self._cfg.min_depth,
                         max_depth=self._cfg.max_depth,
+                        preprocess_in_onnx=self._cfg.preprocess_in_onnx,
                     )
                     self._latest_mtime_ns = stat.st_mtime_ns
                 return self._latest_frame
@@ -331,6 +370,7 @@ class _BufferedRosDepthFrameSource(DepthFrameSource):
             depth_scale=self._cfg.depth_scale,
             min_depth=self._cfg.min_depth,
             max_depth=self._cfg.max_depth,
+            preprocess_in_onnx=self._cfg.preprocess_in_onnx,
         )
         recv_time_s = time.time()
         with self._lock:
@@ -437,7 +477,7 @@ def ros_image_to_depth_meters(
         else:
             depth_scale = 1.0
     depth = image.astype(np.float32) * np.float32(depth_scale)
-    return np.nan_to_num(depth, nan=0.0, posinf=np.inf, neginf=0.0)
+    return depth
 
 
 def _ros_image_to_depth_input(
@@ -445,8 +485,9 @@ def _ros_image_to_depth_input(
     *,
     encoding_override: str | None = None,
     depth_scale: float | None = None,
-    min_depth: float = 0.0,
-    max_depth: float = 10.0,
+    min_depth: float = DEPTH_MIN_DISTANCE_M,
+    max_depth: float = DEPTH_MAX_DISTANCE_M,
+    preprocess_in_onnx: bool = True,
     left_crop_fraction: float = D435_LEFT_CROP_FRACTION,
 ) -> np.ndarray:
     encoding = encoding_override or msg.encoding
@@ -461,6 +502,7 @@ def _ros_image_to_depth_input(
         depth_scale=1.0,
         min_depth=min_depth,
         max_depth=max_depth,
+        preprocess_in_onnx=preprocess_in_onnx,
         left_crop_fraction=left_crop_fraction,
     )
 
@@ -489,6 +531,8 @@ def create_depth_frame_source(config: dict | None) -> DepthFrameSource:
             cfg_data[key] = float(value)
 
     cfg = DepthSourceConfig(**cfg_data)
+    if not cfg.preprocess_in_onnx:
+        _validate_depth_range(cfg.min_depth, cfg.max_depth)
     if cfg.source == "zero":
         return ZeroDepthFrameSource()
     if cfg.source == "npy":
@@ -517,27 +561,52 @@ def validate_depth_policy_interface(
     output_names: list[str],
     output_shapes: list[list[int]],
     metadata: dict[str, str] | None = None,
+    *,
+    hidden_state_shape: tuple[int, int] = HIDDEN_STATE_SHAPE,
+    policy_name: str = "mjlab_repts_lin_depth",
 ) -> None:
+    if (
+        len(hidden_state_shape) != 2
+        or hidden_state_shape[0] != 1
+        or hidden_state_shape[1] <= 0
+    ):
+        raise ValueError(
+            f"{policy_name} hidden_state_shape must be (1, positive_size), "
+            f"got {hidden_state_shape}"
+        )
+
     expected_input_shapes = [
         [1, *PROPRIO_HISTORY_SHAPE],
         [1, 3],
         [1, *DEPTH_SHAPE],
-        list(HIDDEN_STATE_SHAPE),
+        list(hidden_state_shape),
     ]
-    expected_output_shapes = [[1, 8], [1, 3], list(HIDDEN_STATE_SHAPE)]
+    expected_output_shapes = [[1, 8], [1, 3], list(hidden_state_shape)]
 
     if input_names != POLICY_INPUT_NAMES:
-        raise ValueError(f"mjlab_repts_lin_depth ONNX inputs must be {POLICY_INPUT_NAMES}, got {input_names}")
-    if any(not _shape_matches(actual, expected) for actual, expected in zip(input_shapes, expected_input_shapes)):
         raise ValueError(
-            f"mjlab_repts_lin_depth ONNX input shapes must be "
+            f"{policy_name} ONNX inputs must be {POLICY_INPUT_NAMES}, got {input_names}"
+        )
+    input_shapes_match = all(
+        _shape_matches(actual, expected)
+        for actual, expected in zip(input_shapes, expected_input_shapes)
+    )
+    if not input_shapes_match:
+        raise ValueError(
+            f"{policy_name} ONNX input shapes must be "
             f"{expected_input_shapes}, got {input_shapes}"
         )
     if output_names != POLICY_OUTPUT_NAMES:
-        raise ValueError(f"mjlab_repts_lin_depth ONNX outputs must be {POLICY_OUTPUT_NAMES}, got {output_names}")
-    if any(not _shape_matches(actual, expected) for actual, expected in zip(output_shapes, expected_output_shapes)):
         raise ValueError(
-            f"mjlab_repts_lin_depth ONNX output shapes must be "
+            f"{policy_name} ONNX outputs must be {POLICY_OUTPUT_NAMES}, got {output_names}"
+        )
+    output_shapes_match = all(
+        _shape_matches(actual, expected)
+        for actual, expected in zip(output_shapes, expected_output_shapes)
+    )
+    if not output_shapes_match:
+        raise ValueError(
+            f"{policy_name} ONNX output shapes must be "
             f"{expected_output_shapes}, got {output_shapes}"
         )
 
@@ -547,14 +616,14 @@ def validate_depth_policy_interface(
     student_observation_names = _metadata_list(metadata, "student_observation_names")
     if student_observation_names is not None and student_observation_names != list(PROPRIO_TERM_ORDER):
         raise ValueError(
-            f"mjlab_repts_lin_depth ONNX metadata student_observation_names must be "
+            f"{policy_name} ONNX metadata student_observation_names must be "
             f"{list(PROPRIO_TERM_ORDER)}, got {student_observation_names}"
         )
 
     command_observation_names = _metadata_list(metadata, "command_observation_names")
     if command_observation_names is not None and command_observation_names != ["command"]:
         raise ValueError(
-            "mjlab_repts_lin_depth ONNX metadata command_observation_names must be "
+            f"{policy_name} ONNX metadata command_observation_names must be "
             f"['command'], got {command_observation_names}"
         )
 
@@ -566,42 +635,46 @@ def validate_depth_policy_interface(
         and policy_input_names != legacy_metadata_input_names
     ):
         raise ValueError(
-            f"mjlab_repts_lin_depth ONNX metadata policy_input_names must be "
+            f"{policy_name} ONNX metadata policy_input_names must be "
             f"{POLICY_INPUT_NAMES} or legacy {legacy_metadata_input_names}, got {policy_input_names}"
         )
 
     policy_output_names = _metadata_list(metadata, "policy_output_names")
-    if policy_output_names is not None and policy_output_names != POLICY_OUTPUT_NAMES[:2]:
+    if (
+        policy_output_names is not None
+        and policy_output_names != POLICY_OUTPUT_NAMES[:2]
+        and policy_output_names != POLICY_OUTPUT_NAMES
+    ):
         raise ValueError(
-            f"mjlab_repts_lin_depth ONNX metadata policy_output_names must begin with "
-            f"{POLICY_OUTPUT_NAMES[:2]}, got {policy_output_names}"
+            f"{policy_name} ONNX metadata policy_output_names must be "
+            f"{POLICY_OUTPUT_NAMES[:2]} or {POLICY_OUTPUT_NAMES}, got {policy_output_names}"
         )
 
     student_history_length = metadata.get("student_history_length")
     if student_history_length is not None and int(student_history_length) != HISTORY_LENGTH:
         raise ValueError(
-            f"mjlab_repts_lin_depth ONNX metadata student_history_length must be "
+            f"{policy_name} ONNX metadata student_history_length must be "
             f"{HISTORY_LENGTH}, got {student_history_length}"
         )
 
     flatten_history = metadata.get("student_history_flatten_dim")
     if flatten_history is not None and flatten_history.lower() != "false":
         raise ValueError(
-            "mjlab_repts_lin_depth ONNX metadata student_history_flatten_dim must be false, "
+            f"{policy_name} ONNX metadata student_history_flatten_dim must be false, "
             f"got {flatten_history}"
         )
 
     history_order = metadata.get("student_history_order")
     if history_order is not None and history_order != "oldest_to_newest":
         raise ValueError(
-            "mjlab_repts_lin_depth ONNX metadata student_history_order must be "
+            f"{policy_name} ONNX metadata student_history_order must be "
             f"oldest_to_newest, got {history_order}"
         )
 
     action_target_names = _metadata_list(metadata, "action_target_names")
     if action_target_names is not None and action_target_names != list(POLICY_ACTION_NAMES):
         raise ValueError(
-            f"mjlab_repts_lin_depth ONNX metadata action_target_names must be "
+            f"{policy_name} ONNX metadata action_target_names must be "
             f"{list(POLICY_ACTION_NAMES)}, got {action_target_names}"
         )
 
@@ -612,7 +685,7 @@ def validate_depth_policy_interface(
             action_scale, expected_action_scale
         ):
             raise ValueError(
-                f"mjlab_repts_lin_depth ONNX metadata action_scale must be "
+                f"{policy_name} ONNX metadata action_scale must be "
                 f"{list(POLICY_ACTION_SCALES)}, got {action_scale.tolist()}"
             )
 
@@ -625,6 +698,7 @@ __all__ = [
     "D435_RAW_DEPTH_HEIGHT",
     "D435_RAW_DEPTH_WIDTH",
     "DEPTH_INPUT_SHAPE",
+    "GRU_HIDDEN_STATE_SHAPE",
     "HIDDEN_STATE_SHAPE",
     "POLICY_INPUT_NAMES",
     "POLICY_OUTPUT_NAMES",

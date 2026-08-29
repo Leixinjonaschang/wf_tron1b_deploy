@@ -311,8 +311,11 @@ def command_from_joystick_axes(axes) -> np.ndarray:
         raise ValueError(f"joystick axes must have at least 3 values, got {axes.shape[0]}")
 
     clipped = np.clip(axes[:3], -1.0, 1.0)
+    forward_command = clipped[1]
+    if forward_command > 0.0:
+        forward_command *= np.float32(2.0)
     return np.array(
-        [clipped[1], clipped[0], clipped[2] * np.float32(np.pi / 2.0)],
+        [forward_command, clipped[0], clipped[2] * np.float32(np.pi / 2.0)],
         dtype=np.float32,
     )
 

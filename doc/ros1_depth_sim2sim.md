@@ -50,6 +50,10 @@ Run inside the container:
 /work/scripts/docker_run_sim2sim_ros1.sh
 ```
 
+The launcher defaults to `mjlab_repts_gru_lin_depth`. The deployment side
+supplies finite metric depth with invalid samples encoded as `0 m`; the ONNX
+graph performs the `[0.2, 2.0] m` range mapping and `[0, 1]` normalization.
+
 Stop sim2sim with `Ctrl-C` in the terminal running the joystick.
 
 ### Run terrain scenes
@@ -123,6 +127,10 @@ Terminal 3, start controller:
 ```bash
 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth python rl-deploy-with-python/main.py 127.0.0.1
 ```
+
+使用新 student encoder policy 时，将 simulator、controller 和一键启动脚本
+中的 `RL_TYPE` 统一改为 `mjlab_repts_gru_lin_depth`；其余 ROS1 depth 配置
+不变。
 
 Terminal 4, optional depth viewer:
 

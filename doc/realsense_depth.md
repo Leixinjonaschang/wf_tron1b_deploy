@@ -45,11 +45,14 @@ rostopic list
 常见 depth topic 可能类似：
 
 ```text
-/camera/depth/image_rect_raw
+/camera0/depth/image_rect_raw
 /camera/depth/color/points
 ```
 
-以现场 `rostopic list` 输出为准。本仓库 sim2sim 默认 depth image topic 是 `/camera/depth/image_rect_raw`，真机 topic 如果不同，需要设置 `MJLAB_DEPTH_ROS_TOPIC`。
+以现场 `rostopic list` 输出为准。本仓库真机部署配置默认使用
+`/camera0/depth/image_rect_raw`，sim2sim 默认使用
+`/camera/depth/image_rect_raw`。临时切换 topic 时可以设置
+`MJLAB_DEPTH_ROS_TOPIC` 覆盖 YAML。
 
 查看 depth image 消息类型：
 
@@ -89,29 +92,32 @@ source /opt/ros/noetic/setup.bash
 export ROS_MASTER_URI=http://10.192.1.2:11311
 export ROS_IP=10.192.1.200
 
-export ROS_TYPE=ros1
 export ROBOT_TYPE=WF_TRON1B
-export RL_TYPE=mjlab_repts_lin_depth
-export MJLAB_DEPTH_SOURCE=ros
-export MJLAB_DEPTH_ROS_TOPIC=/camera/depth/image_rect_raw
-export MJLAB_DEPTH_MAX_AGE=0.5
+export RL_TYPE=mjlab_repts_gru_lin_depth
 
 python3 rl-deploy-with-python/main.py 10.192.1.2
 ```
 
-`mjlab_repts_lin_depth` 的处理链路：
+`mjlab_repts_gru_lin_depth` 的处理链路：
 
-1. `RosDepthFrameSource` 订阅 `MJLAB_DEPTH_ROS_TOPIC`。
+1. `RosDepthFrameSource` 默认订阅 YAML 中的 `/camera0/depth/image_rect_raw`。
 2. ROS callback 将 `sensor_msgs/Image` 转为 numpy depth。
 3. `16UC1`/`mono16` 从毫米转米，`32FC1` 保持米单位。
-4. depth 被裁剪到 `MJLAB_DEPTH_MIN` 和 `MJLAB_DEPTH_MAX`，默认 `0.0` 到 `10.0`。
+4. 部署端将 NaN、±Inf 和非正值编码为有限 sentinel `0 m`，保留其余米制值。
 5. 完整 D435 raw frame `480x848` 左裁 128 列，得到 `480x720`。
 6. 左裁后的图像以最近邻 resize 到 ONNX 输入 `[1, 1, 30, 45]`。
-7. `WheelfootController.compute_actions()` 在 policy loop 中读取最新帧并输入 ONNX。
+7. ONNX 内部将低于 `0.2 m` 的值（包括 `0 m` sentinel）映射为 `2.0 m`，裁剪到
+   `[0.2, 2.0] m`，再归一化到 `[0, 1]`。
+8. `WheelfootController.compute_actions()` 在 policy loop 中读取最新帧并输入 ONNX。
+
+原 `mjlab_repts_lin_depth` policy 保留部署时原有的 `0–10 m` 米制处理；两种
+policy 会根据 `RL_TYPE` 自动选择各自的 depth profile，不应交叉使用。
 
 sim2sim 的 `d435` producer 默认发布完整 `480x848` 米深度、频率 `30 Hz`。真机和 sim2sim 都必须将完整 FOV raw frame 交给 source；不要预先传入已经裁成 `30x45` 的图像，避免重复左裁。部署前必须导出输入 depth 为 `[1, 1, 30, 45]` 的新 ONNX；旧 `[1, 1, 28, 48]` ONNX 会被接口校验拒绝。
 
-如果 ROS topic 间隔超过 `MJLAB_DEPTH_MAX_AGE`，controller 会抛出 stale frame `TimeoutError`，这是为了避免策略使用过期 depth。
+如果 ROS topic 间隔超过 YAML 中的 `max_age_s`（默认 `0.5` 秒），
+controller 会抛出 stale frame `TimeoutError`，这是为了避免策略使用过期
+depth。
 
 ## 排查清单
 
@@ -122,5 +128,5 @@ sim2sim 的 `d435` producer 默认发布完整 `480x848` 米深度、频率 `30 
 - `rostopic list` 是否能看到相机 topic。
 - `rostopic hz <depth_topic>` 是否有稳定频率。
 - `rqt_image_view` 或 RViz 是否能显示 depth。
-- `MJLAB_DEPTH_ROS_TOPIC` 是否与真实 depth image topic 一致。
+- YAML 中的 `depth.ros_topic` 是否与真实 depth image topic 一致。
 - Python 环境是否能 import `rospy` 和 `sensor_msgs.msg`。

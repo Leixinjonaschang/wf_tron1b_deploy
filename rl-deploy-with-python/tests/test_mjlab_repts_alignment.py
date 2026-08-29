@@ -337,10 +337,22 @@ class MjlabRepTsAlignmentTest(unittest.TestCase):
                 )
                 offset += dim
 
-    def test_joystick_command_uses_training_range_without_user_cmd_scales(self):
+    def test_joystick_command_scales_forward_velocity_to_two_meters_per_second(self):
         command = command_from_joystick_axes(np.array([-2.0, 0.5, 2.0], dtype=np.float32))
 
-        np.testing.assert_allclose(command, np.array([0.5, -1.0, np.pi / 2.0], dtype=np.float32))
+        np.testing.assert_allclose(command, np.array([1.0, -1.0, np.pi / 2.0], dtype=np.float32))
+
+        max_forward = command_from_joystick_axes(
+            np.array([0.0, 1.0, 0.0], dtype=np.float32)
+        )
+        np.testing.assert_allclose(max_forward, np.array([2.0, 0.0, 0.0], dtype=np.float32))
+
+    def test_joystick_command_keeps_max_reverse_velocity_at_minus_one(self):
+        max_reverse = command_from_joystick_axes(
+            np.array([0.0, -1.0, 0.0], dtype=np.float32)
+        )
+
+        np.testing.assert_allclose(max_reverse, np.array([-1.0, 0.0, 0.0], dtype=np.float32))
 
     def test_actions_clip_to_mjlab_student_range(self):
         actions = clip_actions(np.array([-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 2.5, 3.0]))

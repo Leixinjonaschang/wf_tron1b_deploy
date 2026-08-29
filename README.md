@@ -7,7 +7,168 @@
 
 ## Depth-Based Perceptive Sim-to-Sim Test
 
-用于 depth-based policy：`mjlab_repts_lin_depth`。
+支持两种 depth-based policy：
+
+- `mjlab_repts_lin_depth`：原 student encoder，GRU hidden state 为 `[1, 64]`。
+- `mjlab_repts_gru_lin_depth`：新 student encoder，GRU hidden state 为 `[1, 128]`。
+
+Docker 一键脚本默认运行新策略 `mjlab_repts_gru_lin_depth`。两种策略共用相同
+的 depth topic、裁剪和缩放。新策略的部署端仅传入有限的米制 depth（无效值
+为 `0 m`），`[0.2, 2.0] m` 范围处理和 `[0, 1]` 归一化已移入 ONNX；原策略
+继续由部署端提供 `0–10 m` 米制输入。controller 会根据 `RL_TYPE` 自动选择
+匹配的处理配置。
+
+### 宿主机本地 ROS1 sim2sim（手动启动）
+
+以下流程在宿主机上直接运行 MuJoCo、controller 和 ROS1 depth
+transport。首先在仓库根目录同步 Python 环境：
+
+```bash
+uv sync
+```
+
+#### 检查和选择宿主机 GPU renderer
+
+MuJoCo 的物理仿真仍在 CPU 上运行，窗口和 depth image 使用当前桌面会话的
+OpenGL renderer。renderer 由启动终端的环境变量选择，不需要修改 Python
+代码。
+
+安装检查工具并查看当前 renderer：
+
+```bash
+sudo apt install mesa-utils
+glxinfo -B | grep -E 'OpenGL vendor|OpenGL renderer'
+```
+
+常见结果：
+
+- `AMD RENOIR`、`Mesa Intel` 或 `AMD Radeon`：使用对应的 AMD/Intel GPU。
+- `NVIDIA GeForce ...`：使用 NVIDIA GPU。
+- `llvmpipe` 或 `softpipe`：使用 CPU 软件渲染。
+
+本机显示 `AMD RENOIR` 时已经是 AMD 核显 GPU 渲染，并非 CPU 渲染。如果
+AMD 核显性能足够，可以直接按后续命令运行。
+
+对于 AMD/Intel 核显加 NVIDIA 独显的笔记本，先确认 NVIDIA 驱动正常：
+
+```bash
+nvidia-smi
+```
+
+需要临时让整个一键 sim2sim 流程使用 NVIDIA PRIME Render Offload 时，在
+同一条启动命令前加环境变量：
+
+```bash
+__NV_PRIME_RENDER_OFFLOAD=1 \
+__GLX_VENDOR_LIBRARY_NAME=nvidia \
+ROBOT_TYPE=WF_TRON1B \
+RL_TYPE=mjlab_repts_gru_lin_depth \
+scripts/start_sim2sim.sh
+```
+
+如果手动启动各进程，只需给 MuJoCo simulator 命令添加相同前缀：
+
+```bash
+__NV_PRIME_RENDER_OFFLOAD=1 \
+__GLX_VENDOR_LIBRARY_NAME=nvidia \
+ROBOT_TYPE=WF_TRON1B \
+RL_TYPE=mjlab_repts_gru_lin_depth \
+MJLAB_DEPTH_SINK=ros \
+uv run python pointfoot-mujoco-sim/simulator.py
+```
+
+启动前可验证 PRIME Offload 是否会选择 NVIDIA：
+
+```bash
+__NV_PRIME_RENDER_OFFLOAD=1 \
+__GLX_VENDOR_LIBRARY_NAME=nvidia \
+glxinfo -B | grep -E 'OpenGL vendor|OpenGL renderer'
+```
+
+预期 vendor 为 `NVIDIA Corporation`，renderer 为具体的 NVIDIA GPU。
+上述变量仅对当前命令生效，不会永久修改系统；不添加前缀即可恢复默认的
+AMD renderer。若 `nvidia-smi` 本身报错，应先修复 NVIDIA 驱动，再尝试
+PRIME Offload。
+
+下面每一步均在独立 Bash 终端中执行，并保持前面启动的进程持续运行。
+所有 ROS 节点必须使用同一个本地 master、本机地址和 depth topic。
+
+1. 启动本地 ROS master：
+
+```bash
+cd ~/CLX/wf_tron1b_deploy
+source /opt/ros/noetic/setup.bash
+
+env -u ROS_HOSTNAME \
+  ROS_MASTER_URI=http://127.0.0.1:11311 \
+  ROS_IP=127.0.0.1 \
+  roscore
+```
+
+2. 启动 MuJoCo simulator 并发布 depth image：
+
+```bash
+cd ~/CLX/wf_tron1b_deploy
+source /opt/ros/noetic/setup.bash
+
+env -u ROS_HOSTNAME \
+  ROS_MASTER_URI=http://127.0.0.1:11311 \
+  ROS_IP=127.0.0.1 \
+  ROBOT_TYPE=WF_TRON1B \
+  RL_TYPE=mjlab_repts_lin_depth \
+  MJLAB_DEPTH_SINK=ros \
+  MJLAB_DEPTH_ROS_TOPIC=/camera/depth/image_rect_raw \
+  uv run python pointfoot-mujoco-sim/simulator.py
+```
+
+simulator 终端应显示 `sink=ros` 和
+`ros_topic=/camera/depth/image_rect_raw`。
+
+3. 确认 depth publisher 地址和帧率：
+
+```bash
+cd ~/CLX/wf_tron1b_deploy
+source /opt/ros/noetic/setup.bash
+export ROS_MASTER_URI=http://127.0.0.1:11311
+export ROS_IP=127.0.0.1
+unset ROS_HOSTNAME
+
+rostopic info /camera/depth/image_rect_raw
+rostopic hz /camera/depth/image_rect_raw
+```
+
+`rostopic info` 中的 publisher URI 应为 `http://127.0.0.1:<port>/`，
+帧率应接近 `30 Hz`。如果 publisher URI 仍为 `10.192.1.200`，说明
+simulator 启动时继承了真机调试用的 `ROS_IP`，需要停止后按第 2 步重启。
+
+4. depth topic 正常后启动 RL controller：
+
+```bash
+cd ~/CLX/wf_tron1b_deploy
+source /opt/ros/noetic/setup.bash
+
+env -u ROS_HOSTNAME \
+  ROS_MASTER_URI=http://127.0.0.1:11311 \
+  ROS_IP=127.0.0.1 \
+  ROBOT_TYPE=WF_TRON1B \
+  RL_TYPE=mjlab_repts_lin_depth \
+  MJLAB_DEPTH_SOURCE=ros \
+  MJLAB_DEPTH_ROS_TOPIC=/camera/depth/image_rect_raw \
+  uv run python rl-deploy-with-python/main.py
+```
+
+5. 启动虚拟遥控器：
+
+```bash
+cd ~/CLX/wf_tron1b_deploy
+pointfoot-mujoco-sim/robot-joystick/robot-joystick
+```
+
+如果 controller 报 `timed out waiting for ROS depth image`，先重新执行第 3 步，
+确认 simulator 仍在运行、publisher URI 可访问，且 simulator 与 controller
+使用完全相同的 topic。
+
+### Docker ROS1 sim2sim
 
 在宿主机执行, 根据 Dockerfile 构建 docker 镜像：
 

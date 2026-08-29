@@ -4,7 +4,7 @@
 
 原文链接：https://www.limxdynamics.com/zh/documents/799585387524788224
 
-本文只整理真机部署相关流程，并按本仓库 `WF_TRON1B` Python 部署场景补充注意事项。官方示例常用 `PF_TRON1A`，在本仓库中应按实际机器人替换为 `WF_TRON1B`。
+本文只整理真机部署相关流程，并按本仓库唯一支持的 `WF_TRON1B` Python 部署场景补充注意事项。
 
 ## 适用范围
 

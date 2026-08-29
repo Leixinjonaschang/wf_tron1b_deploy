@@ -113,8 +113,3 @@ else()
   install(DIRECTORY ${LIB_PATH}/. DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
 endif()
 
-option(EXAMPLE "Build examples ON/OFF" ON)
-if(EXAMPLE)
-  add_subdirectory(examples)
-endif()
-

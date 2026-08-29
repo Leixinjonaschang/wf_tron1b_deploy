@@ -37,19 +37,13 @@ Example output:
 
 ```
 tron1-mujoco-sim/robot-description/pointfoot
-├── PF_P441A
-├── PF_P441B
-├── PF_P441C
-├── PF_P441C2
-├── PF_TRON1A
-├── SF_TRON1A
-└── WF_TRON1A
+└── WF_TRON1B
 ```
 
-Take `PF_P441C` as an example (replace it with your actual robot type):
+Set the supported robot model type:
 
 ```bash
-echo 'export ROBOT_TYPE=PF_P441C' >> ~/.bashrc && source ~/.bashrc
+echo 'export ROBOT_TYPE=WF_TRON1B' >> ~/.bashrc && source ~/.bashrc
 ```
 
 ### Step 5: Run the MuJoCo simulator
@@ -60,7 +54,7 @@ python tron1-mujoco-sim/simulator.py
 
 ---
 
-## 2. Compile and Run the Controller
+## 2. Compile the SDK
 
 ### Step 1: Open a terminal
 
@@ -71,7 +65,7 @@ sudo apt update
 sudo apt install -y cmake build-essential
 ```
 
-### Step 3: Compile the SDK example controller
+### Step 3: Compile the SDK
 
 ```bash
 cd tron1-mujoco-sim/limxsdk-lowlevel
@@ -79,10 +73,4 @@ mkdir -p build
 cd build
 cmake ..
 make
-```
-
-### Step 4: Run the example controller
-
-```bash
-./examples/pf_groupJoints_move
 ```

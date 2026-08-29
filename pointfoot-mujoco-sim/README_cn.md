@@ -32,20 +32,14 @@
     ```
     limx@limx:~$ tree -L 1 tron1-mujoco-sim/robot-description/pointfoot
     tron1-mujoco-sim/robot-description/pointfoot
-    ├── PF_P441A
-    ├── PF_P441B
-    ├── PF_P441C
-    ├── PF_P441C2
-    ├── PF_TRON1A
-    ├── SF_TRON1A
-    └── WF_TRON1A
+    └── WF_TRON1B
 
     ```
 
-  - 以`PF_P441C`（请根据实际机器人类型进行替换）为例，设置机器人型号类型：
+  - 设置本项目支持的机器人型号：
 
     ```
-    echo 'export ROBOT_TYPE=PF_P441C' >> ~/.bashrc && source ~/.bashrc
+    echo 'export ROBOT_TYPE=WF_TRON1B' >> ~/.bashrc && source ~/.bashrc
     ```
 
 - 运行 MuJoCo 仿真器：
@@ -54,7 +48,7 @@
   python tron1-mujoco-sim/simulator.py
   ```
 
-## 2. 编译运行控制
+## 2. 编译 SDK
 
 - 打开一个 Bash 终端。
 
@@ -65,7 +59,7 @@
   sudo apt install -y cmake build-essential
   ```
 
-- 编译控制器 SDK 示例：
+- 编译 SDK：
 
   ```
   cd tron1-mujoco-sim/limxsdk-lowlevel
@@ -73,12 +67,6 @@
   cd build
   cmake ..
   make
-  ```
-
-- 运行控制器 SDK 示例：
-
-  ```
-  ./examples/pf_groupJoints_move
   ```
 
 ## 3. 仿真展示

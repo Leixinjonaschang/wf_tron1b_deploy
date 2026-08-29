@@ -6,6 +6,19 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 IMAGE_NAME="${IMAGE_NAME:-tron_sim2sim:latest}"
 CONTAINER_NAME="${CONTAINER_NAME:-tron_deploy}"
 NVIDIA_GPU="${NVIDIA_GPU:-all}"
+RL_TYPE_VALUE="${RL_TYPE:-mjlab_repts_gru_lin_depth}"
+DEPTH_CONTROLLER_ARGS=()
+if [[ "${RL_TYPE_VALUE}" == "mjlab_repts_lin_depth" ]]; then
+  DEPTH_VIEW_MIN_DEFAULT=0.0
+  DEPTH_VIEW_MAX_DEFAULT=10.0
+  DEPTH_CONTROLLER_ARGS=(
+    -e MJLAB_DEPTH_MIN="${MJLAB_DEPTH_MIN:-0.0}"
+    -e MJLAB_DEPTH_MAX="${MJLAB_DEPTH_MAX:-10.0}"
+  )
+else
+  DEPTH_VIEW_MIN_DEFAULT=0.2
+  DEPTH_VIEW_MAX_DEFAULT=2.0
+fi
 
 if docker container inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
   if [[ "$(docker inspect -f '{{.State.Running}}' "${CONTAINER_NAME}")" == "true" ]]; then
@@ -47,7 +60,7 @@ docker run -d \
   -e NVIDIA_DRIVER_CAPABILITIES="${NVIDIA_DRIVER_CAPABILITIES:-graphics,compute,utility}" \
   -e XAUTHORITY=/tmp/.docker.xauth \
   -e ROBOT_TYPE="${ROBOT_TYPE:-WF_TRON1B}" \
-  -e RL_TYPE="${RL_TYPE:-mjlab_repts_lin_depth}" \
+  -e RL_TYPE="${RL_TYPE_VALUE}" \
   -e PYTHON=python \
   -e ROS_TYPE=ros1 \
   -e MJLAB_DEPTH_SOURCE="${MJLAB_DEPTH_SOURCE:-ros}" \
@@ -57,13 +70,14 @@ docker run -d \
   -e MJLAB_DEPTH_CAPTURE_HZ="${MJLAB_DEPTH_CAPTURE_HZ:-30.0}" \
   -e MJLAB_DEPTH_HEIGHT="${MJLAB_DEPTH_HEIGHT:-480}" \
   -e MJLAB_DEPTH_WIDTH="${MJLAB_DEPTH_WIDTH:-848}" \
+  "${DEPTH_CONTROLLER_ARGS[@]}" \
   -e MJLAB_DEPTH_MAX_AGE="${MJLAB_DEPTH_MAX_AGE:-0.5}" \
   -e MJLAB_DEPTH_NPY_PATH="${MJLAB_DEPTH_NPY_PATH:-/work/logs/sim2sim/depth_frame.npy}" \
   -e MJLAB_DEPTH_VIEW="${MJLAB_DEPTH_VIEW:-1}" \
   -e MJLAB_DEPTH_VIEW_SOURCE="${MJLAB_DEPTH_VIEW_SOURCE:-${MJLAB_DEPTH_SOURCE:-ros}}" \
   -e MJLAB_DEPTH_VIEW_SCALE="${MJLAB_DEPTH_VIEW_SCALE:-1}" \
-  -e MJLAB_DEPTH_VIEW_MIN="${MJLAB_DEPTH_VIEW_MIN:-0.0}" \
-  -e MJLAB_DEPTH_VIEW_MAX="${MJLAB_DEPTH_VIEW_MAX:-10.0}" \
+  -e MJLAB_DEPTH_VIEW_MIN="${MJLAB_DEPTH_VIEW_MIN:-${DEPTH_VIEW_MIN_DEFAULT}}" \
+  -e MJLAB_DEPTH_VIEW_MAX="${MJLAB_DEPTH_VIEW_MAX:-${DEPTH_VIEW_MAX_DEFAULT}}" \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v "${XAUTH_FILE}:/tmp/.docker.xauth:ro" \
   -v "${REPO_DIR}:/work:rw" \

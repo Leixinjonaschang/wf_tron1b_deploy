@@ -12,9 +12,11 @@
 - `mjlab_repts_lin_depth`：原 student encoder，GRU hidden state 为 `[1, 64]`。
 - `mjlab_repts_gru_lin_depth`：新 student encoder，GRU hidden state 为 `[1, 128]`。
 
-下列命令默认展示原策略；运行新策略时，将 simulator 和 controller 命令中的
-`RL_TYPE` 同时改为 `mjlab_repts_gru_lin_depth`。两种策略共用相同的 depth
-topic、裁剪、缩放和 `MJLAB_DEPTH_*` 配置。
+Docker 一键脚本默认运行新策略 `mjlab_repts_gru_lin_depth`。两种策略共用相同
+的 depth topic、裁剪和缩放。新策略的部署端仅传入有限的米制 depth（无效值
+为 `0 m`），`[0.2, 2.0] m` 范围处理和 `[0, 1]` 归一化已移入 ONNX；原策略
+继续由部署端提供 `0–10 m` 米制输入。controller 会根据 `RL_TYPE` 自动选择
+匹配的处理配置。
 
 ### 宿主机本地 ROS1 sim2sim（手动启动）
 

@@ -40,6 +40,8 @@ DEPTH_HEIGHT = 30
 DEPTH_WIDTH = 45
 DEPTH_SHAPE = (DEPTH_CHANNELS, DEPTH_HEIGHT, DEPTH_WIDTH)
 DEPTH_INPUT_SHAPE = (1, *DEPTH_SHAPE)
+DEPTH_MIN_DISTANCE_M = 0.2
+DEPTH_MAX_DISTANCE_M = 2.0
 HIDDEN_STATE_SIZE = 64
 HIDDEN_STATE_SHAPE = (1, HIDDEN_STATE_SIZE)
 GRU_HIDDEN_STATE_SIZE = 128
@@ -168,19 +170,47 @@ def _resize_nearest(image: np.ndarray, height: int, width: int) -> np.ndarray:
     return image[row_idx[:, None], col_idx[None, :]]
 
 
+def _validate_depth_range(min_depth: float, max_depth: float) -> tuple[float, float]:
+    try:
+        min_depth = float(min_depth)
+        max_depth = float(max_depth)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "depth range must satisfy 0 <= min_depth < max_depth"
+        ) from exc
+    if (
+        not np.isfinite(min_depth)
+        or not np.isfinite(max_depth)
+        or min_depth < 0.0
+        or min_depth >= max_depth
+    ):
+        raise ValueError(
+            "depth range must satisfy 0 <= min_depth < max_depth, "
+            f"got ({min_depth}, {max_depth})"
+        )
+    return min_depth, max_depth
+
+
 def preprocess_depth_image(
     image,
     *,
     encoding: str | None = None,
     target_shape: tuple[int, int] = (DEPTH_HEIGHT, DEPTH_WIDTH),
     depth_scale: float | None = None,
-    min_depth: float = 0.0,
-    max_depth: float = 10.0,
-    invalid_value: float = 0.0,
+    min_depth: float = DEPTH_MIN_DISTANCE_M,
+    max_depth: float = DEPTH_MAX_DISTANCE_M,
+    preprocess_in_onnx: bool = True,
     left_crop_fraction: float = D435_LEFT_CROP_FRACTION,
 ) -> np.ndarray:
-    """Convert a full-FOV raw depth image to ONNX input shape [1, 1, H, W]."""
+    """Convert full-FOV raw depth to finite metric ONNX input."""
 
+    if not isinstance(preprocess_in_onnx, (bool, np.bool_)):
+        raise ValueError(
+            "preprocess_in_onnx must be a boolean, "
+            f"got {preprocess_in_onnx!r}"
+        )
+    if not preprocess_in_onnx:
+        min_depth, max_depth = _validate_depth_range(min_depth, max_depth)
     depth = np.asarray(image)
     if depth.ndim == 3 and depth.shape[-1] == 1:
         depth = depth[..., 0]
@@ -200,13 +230,17 @@ def preprocess_depth_image(
             depth_scale = 1.0
 
     depth = depth.astype(np.float32) * np.float32(depth_scale)
-    depth = np.nan_to_num(
-        depth,
-        nan=invalid_value,
-        posinf=max_depth,
-        neginf=invalid_value,
-    )
-    depth = np.clip(depth, min_depth, max_depth)
+    if preprocess_in_onnx:
+        invalid = ~np.isfinite(depth) | (depth <= np.float32(0.0))
+        depth = np.where(invalid, np.float32(0.0), depth)
+    else:
+        depth = np.nan_to_num(
+            depth,
+            nan=np.float32(0.0),
+            posinf=np.float32(max_depth),
+            neginf=np.float32(0.0),
+        )
+        depth = np.clip(depth, np.float32(min_depth), np.float32(max_depth))
     left_crop = int(round(depth.shape[1] * left_crop_fraction))
     if left_crop >= depth.shape[1]:
         raise ValueError("left_crop_fraction leaves no depth columns")
@@ -226,8 +260,9 @@ class DepthSourceConfig:
     ros_type: str | None = None
     encoding: str | None = None
     depth_scale: float | None = None
-    min_depth: float = 0.0
-    max_depth: float = 10.0
+    min_depth: float = DEPTH_MIN_DISTANCE_M
+    max_depth: float = DEPTH_MAX_DISTANCE_M
+    preprocess_in_onnx: bool = True
     timeout_s: float = 0.2
     max_age_s: float = 0.5
     npy_path: str | None = None
@@ -260,6 +295,7 @@ class NpyDepthFrameSource(DepthFrameSource):
             depth_scale=cfg.depth_scale,
             min_depth=cfg.min_depth,
             max_depth=cfg.max_depth,
+            preprocess_in_onnx=cfg.preprocess_in_onnx,
         )
 
     def frame(self) -> np.ndarray:
@@ -290,6 +326,7 @@ class NpyLiveDepthFrameSource(DepthFrameSource):
                         depth_scale=self._cfg.depth_scale,
                         min_depth=self._cfg.min_depth,
                         max_depth=self._cfg.max_depth,
+                        preprocess_in_onnx=self._cfg.preprocess_in_onnx,
                     )
                     self._latest_mtime_ns = stat.st_mtime_ns
                 return self._latest_frame
@@ -333,6 +370,7 @@ class _BufferedRosDepthFrameSource(DepthFrameSource):
             depth_scale=self._cfg.depth_scale,
             min_depth=self._cfg.min_depth,
             max_depth=self._cfg.max_depth,
+            preprocess_in_onnx=self._cfg.preprocess_in_onnx,
         )
         recv_time_s = time.time()
         with self._lock:
@@ -439,7 +477,7 @@ def ros_image_to_depth_meters(
         else:
             depth_scale = 1.0
     depth = image.astype(np.float32) * np.float32(depth_scale)
-    return np.nan_to_num(depth, nan=0.0, posinf=np.inf, neginf=0.0)
+    return depth
 
 
 def _ros_image_to_depth_input(
@@ -447,8 +485,9 @@ def _ros_image_to_depth_input(
     *,
     encoding_override: str | None = None,
     depth_scale: float | None = None,
-    min_depth: float = 0.0,
-    max_depth: float = 10.0,
+    min_depth: float = DEPTH_MIN_DISTANCE_M,
+    max_depth: float = DEPTH_MAX_DISTANCE_M,
+    preprocess_in_onnx: bool = True,
     left_crop_fraction: float = D435_LEFT_CROP_FRACTION,
 ) -> np.ndarray:
     encoding = encoding_override or msg.encoding
@@ -463,6 +502,7 @@ def _ros_image_to_depth_input(
         depth_scale=1.0,
         min_depth=min_depth,
         max_depth=max_depth,
+        preprocess_in_onnx=preprocess_in_onnx,
         left_crop_fraction=left_crop_fraction,
     )
 
@@ -491,6 +531,8 @@ def create_depth_frame_source(config: dict | None) -> DepthFrameSource:
             cfg_data[key] = float(value)
 
     cfg = DepthSourceConfig(**cfg_data)
+    if not cfg.preprocess_in_onnx:
+        _validate_depth_range(cfg.min_depth, cfg.max_depth)
     if cfg.source == "zero":
         return ZeroDepthFrameSource()
     if cfg.source == "npy":

@@ -93,20 +93,25 @@ export ROS_MASTER_URI=http://10.192.1.2:11311
 export ROS_IP=10.192.1.200
 
 export ROBOT_TYPE=WF_TRON1B
-export RL_TYPE=mjlab_repts_lin_depth
+export RL_TYPE=mjlab_repts_gru_lin_depth
 
 python3 rl-deploy-with-python/main.py 10.192.1.2
 ```
 
-`mjlab_repts_lin_depth` 的处理链路：
+`mjlab_repts_gru_lin_depth` 的处理链路：
 
 1. `RosDepthFrameSource` 默认订阅 YAML 中的 `/camera0/depth/image_rect_raw`。
 2. ROS callback 将 `sensor_msgs/Image` 转为 numpy depth。
 3. `16UC1`/`mono16` 从毫米转米，`32FC1` 保持米单位。
-4. depth 按 YAML 配置裁剪，默认范围为 `0.0` 到 `10.0`。
+4. 部署端将 NaN、±Inf 和非正值编码为有限 sentinel `0 m`，保留其余米制值。
 5. 完整 D435 raw frame `480x848` 左裁 128 列，得到 `480x720`。
 6. 左裁后的图像以最近邻 resize 到 ONNX 输入 `[1, 1, 30, 45]`。
-7. `WheelfootController.compute_actions()` 在 policy loop 中读取最新帧并输入 ONNX。
+7. ONNX 内部将低于 `0.2 m` 的值（包括 `0 m` sentinel）映射为 `2.0 m`，裁剪到
+   `[0.2, 2.0] m`，再归一化到 `[0, 1]`。
+8. `WheelfootController.compute_actions()` 在 policy loop 中读取最新帧并输入 ONNX。
+
+原 `mjlab_repts_lin_depth` policy 保留部署时原有的 `0–10 m` 米制处理；两种
+policy 会根据 `RL_TYPE` 自动选择各自的 depth profile，不应交叉使用。
 
 sim2sim 的 `d435` producer 默认发布完整 `480x848` 米深度、频率 `30 Hz`。真机和 sim2sim 都必须将完整 FOV raw frame 交给 source；不要预先传入已经裁成 `30x45` 的图像，避免重复左裁。部署前必须导出输入 depth 为 `[1, 1, 30, 45]` 的新 ONNX；旧 `[1, 1, 28, 48]` ONNX 会被接口校验拒绝。
 

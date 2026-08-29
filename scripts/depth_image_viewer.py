@@ -18,14 +18,16 @@ sys.path.insert(0, str(DEPLOY_ROOT))
 from mjlab_repts_lin_depth import (
     D435_RAW_DEPTH_HEIGHT,
     D435_RAW_DEPTH_WIDTH,
+    DEPTH_MAX_DISTANCE_M,
+    DEPTH_MIN_DISTANCE_M,
     _resolve_ros_type,
     ros_image_to_depth_meters,
 )
 
 
 DEFAULT_TOPIC = "/camera/depth/image_rect_raw"
-DEFAULT_MIN_DEPTH = 0.0
-DEFAULT_MAX_DEPTH = 10.0
+DEFAULT_MIN_DEPTH = DEPTH_MIN_DISTANCE_M
+DEFAULT_MAX_DEPTH = DEPTH_MAX_DISTANCE_M
 DEFAULT_SCALE = 1
 DEFAULT_REFRESH_HZ = 30.0
 DEFAULT_WINDOW_HEIGHT = D435_RAW_DEPTH_HEIGHT

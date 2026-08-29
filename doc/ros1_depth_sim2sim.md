@@ -50,6 +50,10 @@ Run inside the container:
 /work/scripts/docker_run_sim2sim_ros1.sh
 ```
 
+The launcher defaults to `mjlab_repts_gru_lin_depth`. The deployment side
+supplies finite metric depth with invalid samples encoded as `0 m`; the ONNX
+graph performs the `[0.2, 2.0] m` range mapping and `[0, 1]` normalization.
+
 Stop sim2sim with `Ctrl-C` in the terminal running the joystick.
 
 ### Run terrain scenes

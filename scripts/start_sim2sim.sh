@@ -214,7 +214,7 @@ ensure_python_ros_modules() {
 The selected Python cannot import rospy and sensor_msgs.
 Source ROS1 and run with a Python that can see ROS packages, for example:
   source /opt/ros/noetic/setup.bash
-  PYTHON=python3 ROS_TYPE=ros1 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth scripts/start_sim2sim.sh
+  PYTHON=python3 ROS_TYPE=ros1 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_gru_lin_depth scripts/start_sim2sim.sh
 
 For the legacy file-based fallback, set:
   MJLAB_DEPTH_SOURCE=npy_live MJLAB_DEPTH_SINK=npy
@@ -258,6 +258,15 @@ export RL_TYPE
 export MJLAB_SCENE
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 if is_depth_policy; then
+  if [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]]; then
+    export MJLAB_DEPTH_MIN="${MJLAB_DEPTH_MIN:-0.0}"
+    export MJLAB_DEPTH_MAX="${MJLAB_DEPTH_MAX:-10.0}"
+    DEPTH_VIEW_MIN_DEFAULT="${MJLAB_DEPTH_MIN}"
+    DEPTH_VIEW_MAX_DEFAULT="${MJLAB_DEPTH_MAX}"
+  else
+    DEPTH_VIEW_MIN_DEFAULT=0.2
+    DEPTH_VIEW_MAX_DEFAULT=2.0
+  fi
   export ROS_TYPE="${ROS_TYPE:-ros1}"
   export MJLAB_DEPTH_SOURCE="${MJLAB_DEPTH_SOURCE:-ros}"
   export MJLAB_DEPTH_SINK="${MJLAB_DEPTH_SINK:-ros}"
@@ -265,6 +274,8 @@ if is_depth_policy; then
   export MJLAB_DEPTH_CAPTURE_HZ="${MJLAB_DEPTH_CAPTURE_HZ:-30.0}"
   export MJLAB_DEPTH_HEIGHT="${MJLAB_DEPTH_HEIGHT:-480}"
   export MJLAB_DEPTH_WIDTH="${MJLAB_DEPTH_WIDTH:-848}"
+  export MJLAB_DEPTH_VIEW_MIN="${MJLAB_DEPTH_VIEW_MIN:-${DEPTH_VIEW_MIN_DEFAULT}}"
+  export MJLAB_DEPTH_VIEW_MAX="${MJLAB_DEPTH_VIEW_MAX:-${DEPTH_VIEW_MAX_DEFAULT}}"
   export MJLAB_DEPTH_MAX_AGE="${MJLAB_DEPTH_MAX_AGE:-0.5}"
   if uses_npy_depth; then
     export MJLAB_DEPTH_NPY_PATH="${MJLAB_DEPTH_NPY_PATH:-${DEPTH_FRAME_PATH}}"
@@ -293,6 +304,14 @@ if is_depth_policy; then
   echo "MJLAB_DEPTH_SOURCE=${MJLAB_DEPTH_SOURCE}"
   echo "MJLAB_DEPTH_SINK=${MJLAB_DEPTH_SINK}"
   echo "MJLAB_DEPTH_ROS_TOPIC=${MJLAB_DEPTH_ROS_TOPIC}"
+  if [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]]; then
+    echo "MJLAB_DEPTH_MIN=${MJLAB_DEPTH_MIN}"
+    echo "MJLAB_DEPTH_MAX=${MJLAB_DEPTH_MAX}"
+  else
+    echo "MJLAB_DEPTH_PREPROCESSING=onnx"
+  fi
+  echo "MJLAB_DEPTH_VIEW_MIN=${MJLAB_DEPTH_VIEW_MIN}"
+  echo "MJLAB_DEPTH_VIEW_MAX=${MJLAB_DEPTH_VIEW_MAX}"
   echo "MJLAB_DEPTH_MAX_AGE=${MJLAB_DEPTH_MAX_AGE}"
   echo "MJLAB_DEPTH_VIEW=${MJLAB_DEPTH_VIEW:-auto}"
   if uses_npy_depth; then

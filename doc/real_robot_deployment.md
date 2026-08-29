@@ -65,9 +65,11 @@ topic 为 `/camera0/depth/image_rect_raw`。实际 topic 以 `rostopic list`
 为准；临时调试仍可通过 `MJLAB_DEPTH_*` 环境变量覆盖 YAML。相机 depth
 获取流程见 [realsense_depth.md](./realsense_depth.md)。
 
-新 student encoder policy 使用同一套配置和 depth topic，将上述命令改为
+新 student encoder policy 使用同一个 depth topic，将上述命令改为
 `RL_TYPE=mjlab_repts_gru_lin_depth` 即可。原策略保持 `[1, 64]` recurrent
-state，新策略使用 `[1, 128]` recurrent state，controller 会按所选类型校验。
+state 和部署端 `0–10 m` 米制处理；新策略使用 `[1, 128]` recurrent state，
+部署端只提供无效值为 `0 m` 的米制 depth，范围处理和归一化由 ONNX 完成。
+controller 会按所选类型选择和校验。
 
 ## Python 部署到机器人
 

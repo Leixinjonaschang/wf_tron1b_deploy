@@ -304,13 +304,17 @@ class WheelfootController:
             observation_noise_cfg.get('seed')
         )
         self.depth_source = None
+        self.last_depth_input = None
         self.depth_hidden_state = np.zeros(
             self.depth_hidden_state_shape,
             dtype=np.float32,
         )
         self.predicted_lin_vel = np.zeros(3, dtype=np.float32)
         if self.is_mjlab_repts_depth:
-            self.depth_source = create_depth_frame_source(config['PointfootCfg'].get('depth', {}))
+            depth_cfg = dict(config['PointfootCfg'].get('depth', {}))
+            if self.is_mjlab_repts_lin_depth:
+                depth_cfg.update(config['PointfootCfg'].get('legacy_depth', {}))
+            self.depth_source = create_depth_frame_source(depth_cfg)
 
         # Initialize variables for actions, observations, and commands
         self.proprio_history_vector = np.zeros(self.obs_history_length * self.observations_size)
@@ -504,6 +508,20 @@ class WheelfootController:
         print(tag, "encoder: disabled")
         if self.is_mjlab_repts_depth:
             print(tag, "depth source:", type(self.depth_source).__name__)
+            profile = (
+                "metric meters (ONNX preprocessing)"
+                if self.is_mjlab_repts_gru_lin_depth
+                else "legacy metric"
+            )
+            print(tag, "depth processing:", profile)
+            if self.last_depth_input is not None:
+                print(
+                    tag,
+                    "depth input min/max/mean:",
+                    float(np.min(self.last_depth_input)),
+                    float(np.max(self.last_depth_input)),
+                    float(np.mean(self.last_depth_input)),
+                )
         if self.is_mjlab_repts_lin:
             print(tag, "predicted lin vel:", self.predicted_lin_vel)
         print(tag, "sim2sim obs noise enabled:", self.mjlab_repts_obs_noise_enabled)
@@ -702,6 +720,7 @@ class WheelfootController:
             )
             actor_command = self.commands.astype(np.float32).reshape(1, 3)
             depth = self.depth_source.frame().astype(np.float32)
+            self.last_depth_input = depth
             hidden_state = self.depth_hidden_state.astype(np.float32)
             inputs = {
                 self.policy_input_names[0]: proprio_history,

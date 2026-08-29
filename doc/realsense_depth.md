@@ -4,7 +4,7 @@
 
 原文链接：https://www.limxdynamics.com/zh/documents/799585387524788224
 
-TRON1 机身安装 RealSense D435i，相机可提供 RGB、depth 和点云数据，官方说明主要面向 ROS Noetic 访问机器人端相机数据。本文单独记录 depth 获取流程，并补充本仓库 `mjlab_repts_lin_depth` 的对接方式。
+TRON1 机身安装 RealSense D435i，相机可提供 RGB、depth 和点云数据，官方说明主要面向 ROS Noetic 访问机器人端相机数据。本文单独记录 depth 获取流程，并补充本仓库 `mjlab_repts_gru_lin_depth` 的对接方式。
 
 ## 前提
 
@@ -60,7 +60,7 @@ rostopic list
 rostopic type /camera/depth/image_rect_raw
 ```
 
-期望用于 policy 的输入是 `sensor_msgs/Image`。本仓库 `mjlab_repts_lin_depth` 支持 `16UC1`、`mono16`、`32FC1` 和 `passthrough`，其中 `16UC1`/`mono16` 默认按毫米转米，scale 为 `0.001`。
+期望用于 policy 的输入是 `sensor_msgs/Image`。本仓库 depth source 支持 `16UC1`、`mono16`、`32FC1` 和 `passthrough`，其中 `16UC1`/`mono16` 默认按毫米转米，scale 为 `0.001`。
 
 ## 可视化检查
 
@@ -109,9 +109,6 @@ python3 rl-deploy-with-python/main.py 10.192.1.2
 7. ONNX 内部将低于 `0.2 m` 的值（包括 `0 m` sentinel）映射为 `2.0 m`，裁剪到
    `[0.2, 2.0] m`，再归一化到 `[0, 1]`。
 8. `WheelfootController.compute_actions()` 在 policy loop 中读取最新帧并输入 ONNX。
-
-原 `mjlab_repts_lin_depth` policy 保留部署时原有的 `0–10 m` 米制处理；两种
-policy 会根据 `RL_TYPE` 自动选择各自的 depth profile，不应交叉使用。
 
 sim2sim 的 `d435` producer 默认发布完整 `480x848` 米深度、频率 `30 Hz`。真机和 sim2sim 都必须将完整 FOV raw frame 交给 source；不要预先传入已经裁成 `30x45` 的图像，避免重复左裁。部署前必须导出输入 depth 为 `[1, 1, 30, 45]` 的新 ONNX；旧 `[1, 1, 28, 48]` ONNX 会被接口校验拒绝。
 

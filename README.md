@@ -7,16 +7,9 @@
 
 ## Depth-Based Perceptive Sim-to-Sim Test
 
-支持两种 depth-based policy：
-
-- `mjlab_repts_lin_depth`：原 student encoder，GRU hidden state 为 `[1, 64]`。
-- `mjlab_repts_gru_lin_depth`：新 student encoder，GRU hidden state 为 `[1, 128]`。
-
-Docker 一键脚本默认运行新策略 `mjlab_repts_gru_lin_depth`。两种策略共用相同
-的 depth topic、裁剪和缩放。新策略的部署端仅传入有限的米制 depth（无效值
-为 `0 m`），`[0.2, 2.0] m` 范围处理和 `[0, 1]` 归一化已移入 ONNX；原策略
-继续由部署端提供 `0–10 m` 米制输入。controller 会根据 `RL_TYPE` 自动选择
-匹配的处理配置。
+当前 depth-based policy 为 `mjlab_repts_gru_lin_depth`，GRU hidden state
+为 `[1, 128]`。Docker 一键脚本默认运行该策略。部署端传入有限的米制 depth
+（无效值为 `0 m`），`[0.2, 2.0] m` 范围处理和 `[0, 1]` 归一化已移入 ONNX。
 
 ### 宿主机本地 ROS1 sim2sim（手动启动）
 
@@ -115,7 +108,7 @@ env -u ROS_HOSTNAME \
   ROS_MASTER_URI=http://127.0.0.1:11311 \
   ROS_IP=127.0.0.1 \
   ROBOT_TYPE=WF_TRON1B \
-  RL_TYPE=mjlab_repts_lin_depth \
+  RL_TYPE=mjlab_repts_gru_lin_depth \
   MJLAB_DEPTH_SINK=ros \
   MJLAB_DEPTH_ROS_TOPIC=/camera/depth/image_rect_raw \
   uv run python pointfoot-mujoco-sim/simulator.py
@@ -151,7 +144,7 @@ env -u ROS_HOSTNAME \
   ROS_MASTER_URI=http://127.0.0.1:11311 \
   ROS_IP=127.0.0.1 \
   ROBOT_TYPE=WF_TRON1B \
-  RL_TYPE=mjlab_repts_lin_depth \
+  RL_TYPE=mjlab_repts_gru_lin_depth \
   MJLAB_DEPTH_SOURCE=ros \
   MJLAB_DEPTH_ROS_TOPIC=/camera/depth/image_rect_raw \
   uv run python rl-deploy-with-python/main.py
@@ -292,7 +285,7 @@ MJLAB_SCENE=scene_rough_ground.xml /work/scripts/docker_run_sim2sim_ros1.sh
 
 ## Non-Perceptive Sim-to-Sim Test
 
-用于 non-perceptive policy sim2sim：`mjlab_repts` 或 `mjlab_repts_lin`。
+用于 non-perceptive policy sim2sim：`mjlab_repts_lin`。
 这个流程直接在宿主机 `uv` 环境运行，不需要 ROS。
 
 准备宿主机 Python 环境：
@@ -300,22 +293,6 @@ MJLAB_SCENE=scene_rough_ground.xml /work/scripts/docker_run_sim2sim_ros1.sh
 ```bash
 uv sync
 ```
-### Representation TS for Blind Locomotion
-
-两个终端分别启动：
-
-```bash
-export ROBOT_TYPE=WF_TRON1B && export RL_TYPE=mjlab_repts && uv run python pointfoot-mujoco-sim/simulator.py 
-```
-
-```bash
-export ROBOT_TYPE=WF_TRON1B && export RL_TYPE=mjlab_repts && uv run python rl-deploy-with-python/main.py 
-```
-
-```bash
-pointfoot-mujoco-sim/robot-joystick/robot-joystick
-```
-
 ### Representation TS with Linear Velocity Prediction for Blind Locomotion
 
 运行 LinVel variant：

@@ -125,12 +125,11 @@ python pointfoot-mujoco-sim/simulator.py 127.0.0.1
 Terminal 3, start controller:
 
 ```bash
-ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth python rl-deploy-with-python/main.py 127.0.0.1
+ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_gru_lin_depth python rl-deploy-with-python/main.py 127.0.0.1
 ```
 
-使用新 student encoder policy 时，将 simulator、controller 和一键启动脚本
-中的 `RL_TYPE` 统一改为 `mjlab_repts_gru_lin_depth`；其余 ROS1 depth 配置
-不变。
+simulator、controller 和一键启动脚本应统一使用
+`RL_TYPE=mjlab_repts_gru_lin_depth`。
 
 Terminal 4, optional depth viewer:
 

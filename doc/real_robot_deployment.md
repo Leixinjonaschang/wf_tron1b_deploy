@@ -47,7 +47,7 @@
 调试时可以先在开发电脑上通过机器人 IP 运行 controller：
 
 ```bash
-ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts \
+ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin \
   uv run python rl-deploy-with-python/main.py 10.192.1.2
 ```
 
@@ -56,20 +56,17 @@ ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts \
 ```bash
 source /opt/ros/noetic/setup.bash
 ROBOT_TYPE=WF_TRON1B \
-RL_TYPE=mjlab_repts_lin_depth \
+RL_TYPE=mjlab_repts_gru_lin_depth \
 python3 rl-deploy-with-python/main.py 10.192.1.2
 ```
 
-`mjlab_repts_lin_depth` 默认从对应参数 YAML 读取 ROS1 depth 配置，真机
+`mjlab_repts_gru_lin_depth` 默认从对应参数 YAML 读取 ROS1 depth 配置，真机
 topic 为 `/camera0/depth/image_rect_raw`。实际 topic 以 `rostopic list`
 为准；临时调试仍可通过 `MJLAB_DEPTH_*` 环境变量覆盖 YAML。相机 depth
 获取流程见 [realsense_depth.md](./realsense_depth.md)。
 
-新 student encoder policy 使用同一个 depth topic，将上述命令改为
-`RL_TYPE=mjlab_repts_gru_lin_depth` 即可。原策略保持 `[1, 64]` recurrent
-state 和部署端 `0–10 m` 米制处理；新策略使用 `[1, 128]` recurrent state，
-部署端只提供无效值为 `0 m` 的米制 depth，范围处理和归一化由 ONNX 完成。
-controller 会按所选类型选择和校验。
+该策略使用 `[1, 128]` recurrent state。部署端只提供无效值为 `0 m` 的米制
+depth，范围处理和归一化由 ONNX 完成。
 
 ## Python 部署到机器人
 
@@ -91,13 +88,13 @@ pip install /home/guest/wf_tron1b_deploy/pointfoot-mujoco-sim/limxsdk-lowlevel/p
 ```bash
 cd /home/guest/wf_tron1b_deploy/rl-deploy-with-python
 export ROBOT_TYPE=WF_TRON1B
-export RL_TYPE=mjlab_repts
+export RL_TYPE=mjlab_repts_lin
 python3 main.py 10.192.1.2
 ```
 
-如果使用 `mjlab_repts_lin_depth`，需要先 source ROS1 环境，再把
-`RL_TYPE` 改为 `mjlab_repts_lin_depth`。depth source、topic、量程和超时
-默认由 `params_mjlab_repts_lin_depth.yaml` 提供，不需要重复导出对应环境变量。
+如果使用 `mjlab_repts_gru_lin_depth`，需要先 source ROS1 环境，再把
+`RL_TYPE` 改为 `mjlab_repts_gru_lin_depth`。depth source、topic、量程和超时
+默认由 `params_mjlab_repts_gru_lin_depth.yaml` 提供，不需要重复导出对应环境变量。
 
 ## 自启动配置
 
@@ -114,7 +111,7 @@ Python controller 自启动模板：
 #!/bin/bash
 
 export ROBOT_TYPE=WF_TRON1B
-export RL_TYPE=mjlab_repts
+export RL_TYPE=mjlab_repts_lin
 
 while true; do
   cd /home/guest/wf_tron1b_deploy/rl-deploy-with-python
@@ -131,7 +128,7 @@ Depth policy 自启动模板：
 source /opt/ros/noetic/setup.bash
 
 export ROBOT_TYPE=WF_TRON1B
-export RL_TYPE=mjlab_repts_lin_depth
+export RL_TYPE=mjlab_repts_gru_lin_depth
 
 while true; do
   cd /home/guest/wf_tron1b_deploy/rl-deploy-with-python

@@ -18,9 +18,7 @@ if __name__ == '__main__':
     # get rl type
     rl_type = os.getenv("RL_TYPE")
     mjlab_rl_types = (
-        "mjlab_repts",
         "mjlab_repts_lin",
-        "mjlab_repts_lin_depth",
         "mjlab_repts_gru_lin_depth",
     )
     supported_rl_types = ("isaacgym", "isaaclab", *mjlab_rl_types)

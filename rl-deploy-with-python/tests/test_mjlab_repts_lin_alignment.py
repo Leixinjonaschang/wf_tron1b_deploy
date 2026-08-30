@@ -308,9 +308,8 @@ class MjlabRepTsLinAlignmentTest(unittest.TestCase):
         controller = controller_module.WheelfootController.__new__(
             controller_module.WheelfootController
         )
-        controller.is_mjlab_repts = False
         controller.is_mjlab_repts_lin = True
-        controller.is_mjlab_repts_lin_depth = False
+        controller.is_mjlab_repts_depth = False
         controller.policy_input_names = ["proprio_history", "actor_command"]
         controller.policy_output_names = ["actions", "predicted_lin_vel"]
         controller.proprio_history_vector = np.arange(5 * 28, dtype=np.float32).reshape(5, 28)

@@ -4,11 +4,12 @@
 
 原文链接：https://www.limxdynamics.com/zh/documents/799585387524788224
 
-本文只整理真机部署相关流程，并按本仓库 `WF_TRON1B` Python 部署场景补充注意事项。官方示例常用 `PF_TRON1A`，在本仓库中应按实际机器人替换为 `WF_TRON1B`。
+本文整理 `WF_TRON1B + mjlab_repts_gru_lin_depth` 的推荐 Python 真机部署流程。
+历史策略见 [Legacy Compatibility](./legacy/README.md)。
 
 ## 适用范围
 
-- 真机低层运动控制调试：LimX lowlevel SDK 示例或本仓库 Python controller。
+- 真机低层运动控制调试：LimX lowlevel SDK 或本仓库 Python controller。
 - RL 策略部署：将训练得到的 ONNX policy 和配置放到机器人可访问路径后运行。
 - 自启动部署：把调试通过的控制程序拷贝到机器人主控电脑，并配置 `/home/guest/autolaunch/autolaunch.sh`。
 
@@ -44,32 +45,22 @@
 
 ## 本仓库真机运行方式
 
-调试时可以先在开发电脑上通过机器人 IP 运行 controller：
-
-```bash
-ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts \
-  uv run python rl-deploy-with-python/main.py 10.192.1.2
-```
-
-如果使用 depth policy，需要先确认相机 depth topic 可用，再运行：
+先确认相机 depth topic 可用，再从开发电脑运行推荐 controller：
 
 ```bash
 source /opt/ros/noetic/setup.bash
 ROBOT_TYPE=WF_TRON1B \
-RL_TYPE=mjlab_repts_lin_depth \
+RL_TYPE=mjlab_repts_gru_lin_depth \
 python3 rl-deploy-with-python/main.py 10.192.1.2
 ```
 
-`mjlab_repts_lin_depth` 默认从对应参数 YAML 读取 ROS1 depth 配置，真机
+`mjlab_repts_gru_lin_depth` 默认从对应参数 YAML 读取 ROS1 depth 配置，真机
 topic 为 `/camera0/depth/image_rect_raw`。实际 topic 以 `rostopic list`
 为准；临时调试仍可通过 `MJLAB_DEPTH_*` 环境变量覆盖 YAML。相机 depth
 获取流程见 [realsense_depth.md](./realsense_depth.md)。
 
-新 student encoder policy 使用同一个 depth topic，将上述命令改为
-`RL_TYPE=mjlab_repts_gru_lin_depth` 即可。原策略保持 `[1, 64]` recurrent
-state 和部署端 `0–10 m` 米制处理；新策略使用 `[1, 128]` recurrent state，
-部署端只提供无效值为 `0 m` 的米制 depth，范围处理和归一化由 ONNX 完成。
-controller 会按所选类型选择和校验。
+该策略使用 `[1, 128]` recurrent state。部署端只提供无效值为 `0 m` 的米制
+depth，范围处理和归一化由 ONNX 完成。
 
 ## Python 部署到机器人
 
@@ -86,18 +77,19 @@ ssh guest@10.192.1.2
 pip install /home/guest/wf_tron1b_deploy/pointfoot-mujoco-sim/limxsdk-lowlevel/python3/amd64/limxsdk-*-py3-none-any.whl
 ```
 
-在机器人端手动运行时：
+在机器人端手动运行推荐策略时：
 
 ```bash
 cd /home/guest/wf_tron1b_deploy/rl-deploy-with-python
+source /opt/ros/noetic/setup.bash
 export ROBOT_TYPE=WF_TRON1B
-export RL_TYPE=mjlab_repts
+export RL_TYPE=mjlab_repts_gru_lin_depth
 python3 main.py 10.192.1.2
 ```
 
-如果使用 `mjlab_repts_lin_depth`，需要先 source ROS1 环境，再把
-`RL_TYPE` 改为 `mjlab_repts_lin_depth`。depth source、topic、量程和超时
-默认由 `params_mjlab_repts_lin_depth.yaml` 提供，不需要重复导出对应环境变量。
+depth source、topic、量程和超时默认由
+`params_mjlab_repts_gru_lin_depth.yaml` 提供；现场 topic 不同时用
+`MJLAB_DEPTH_ROS_TOPIC` 显式覆盖。
 
 ## 自启动配置
 
@@ -108,22 +100,7 @@ ssh guest@10.192.1.2
 busybox vi /home/guest/autolaunch/autolaunch.sh
 ```
 
-Python controller 自启动模板：
-
-```bash
-#!/bin/bash
-
-export ROBOT_TYPE=WF_TRON1B
-export RL_TYPE=mjlab_repts
-
-while true; do
-  cd /home/guest/wf_tron1b_deploy/rl-deploy-with-python
-  python3 main.py 10.192.1.2
-  sleep 3
-done
-```
-
-Depth policy 自启动模板：
+当前推荐策略的自启动模板：
 
 ```bash
 #!/bin/bash
@@ -131,14 +108,13 @@ Depth policy 自启动模板：
 source /opt/ros/noetic/setup.bash
 
 export ROBOT_TYPE=WF_TRON1B
-export RL_TYPE=mjlab_repts_lin_depth
+export RL_TYPE=mjlab_repts_gru_lin_depth
 
-while true; do
-  cd /home/guest/wf_tron1b_deploy/rl-deploy-with-python
-  python3 main.py 10.192.1.2
-  sleep 3
-done
+cd /home/guest/wf_tron1b_deploy/rl-deploy-with-python
+exec python3 main.py 10.192.1.2
 ```
+
+controller 异常退出时应先检查日志和 depth/网络状态，不要用无限重启循环掩盖故障。
 
 保存后重启机器人：
 

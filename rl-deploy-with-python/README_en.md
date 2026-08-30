@@ -37,16 +37,13 @@
 
     ```plaintext
     pointfoot-mujoco-sim/robot-description/pointfoot
-    ├── PF_P441A
-    ├── PF_P441B
-    ├── PF_P441C
-    └── PF_P441C2
+    └── WF_TRON1B
     ```
 
-  - Set the robot model type (using `PF_P441C` as an example; replace with your actual robot type):
+  - Set the supported robot model type:
 
     ```bash
-    echo 'export ROBOT_TYPE=PF_P441C' >> ~/.bashrc && source ~/.bashrc
+    echo 'export ROBOT_TYPE=WF_TRON1B' >> ~/.bashrc && source ~/.bashrc
     ```
 
 - Run the MuJoCo simulator:
@@ -91,19 +88,13 @@
 
     ```plaintext
     rl-deploy-with-python/controllers/model
-    ├── PF_P441A
-    ├── PF_P441B
-    ├── PF_P441C
-    ├── PF_P441C2
-    ├── PF_TRON1A
-    ├── SF_TRON1A
-    └── WF_TRON1A
+    └── WF_TRON1B
     ```
 
-  - Set the robot model type (using `PF_P441C` as an example; replace with your actual robot type):
+  - Set the supported robot model type:
 
     ```bash
-    echo 'export ROBOT_TYPE=PF_P441C' >> ~/.bashrc && source ~/.bashrc
+    echo 'export ROBOT_TYPE=WF_TRON1B' >> ~/.bashrc && source ~/.bashrc
     ```
 
 - Run the control algorithm:

@@ -35,15 +35,8 @@ export RL_TYPE="${RL_TYPE:-mjlab_repts_gru_lin_depth}"
 export ROBOT_IP="${ROBOT_IP:-127.0.0.1}"
 export PYTHON="${PYTHON:-python}"
 
-if [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]]; then
-  export MJLAB_DEPTH_MIN="${MJLAB_DEPTH_MIN:-0.0}"
-  export MJLAB_DEPTH_MAX="${MJLAB_DEPTH_MAX:-10.0}"
-  DEPTH_VIEW_MIN_DEFAULT="${MJLAB_DEPTH_MIN}"
-  DEPTH_VIEW_MAX_DEFAULT="${MJLAB_DEPTH_MAX}"
-else
-  DEPTH_VIEW_MIN_DEFAULT=0.2
-  DEPTH_VIEW_MAX_DEFAULT=2.0
-fi
+DEPTH_VIEW_MIN_DEFAULT=0.2
+DEPTH_VIEW_MAX_DEFAULT=2.0
 
 # ROS1 depth transport defaults. The simulator publishes sensor_msgs/Image on
 # this topic, and the controller/depth viewer subscribe to the same topic.

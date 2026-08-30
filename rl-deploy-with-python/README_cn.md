@@ -34,17 +34,14 @@
     ```
     limx@limx:~$ tree -L 1 pointfoot-mujoco-sim/robot-description/pointfoot
     pointfoot-mujoco-sim/robot-description/pointfoot
-    ├── PF_P441A
-    ├── PF_P441B
-    ├── PF_P441C
-    └── PF_P441C2
+    └── WF_TRON1B
     
     ```
   
-  - 以`PF_P441C`（请根据实际机器人类型进行替换）为例，设置机器人型号类型：
+  - 设置本项目支持的机器人型号：
   
     ```
-    echo 'export ROBOT_TYPE=PF_P441C' >> ~/.bashrc && source ~/.bashrc
+    echo 'export ROBOT_TYPE=WF_TRON1B' >> ~/.bashrc && source ~/.bashrc
     ```
   
 - 运行 MuJoCo 仿真器：
@@ -86,20 +83,14 @@
     ```
     limx@limx:~$ tree -L 1 rl-deploy-with-python/controllers/model
     rl-deploy-with-python/controllers/model
-    ├── PF_P441A
-    ├── PF_P441B
-    ├── PF_P441C
-    ├── PF_P441C2
-    ├── PF_TRON1A
-    ├── SF_TRON1A
-    └── WF_TRON1A
+    └── WF_TRON1B
     
     ```
 
-  - 以`PF_P441C`（请根据实际机器人类型进行替换）为例，设置机器人型号类型：
+  - 设置本项目支持的机器人型号：
 
     ```
-    echo 'export ROBOT_TYPE=PF_P441C' >> ~/.bashrc && source ~/.bashrc
+    echo 'export ROBOT_TYPE=WF_TRON1B' >> ~/.bashrc && source ~/.bashrc
     ```
 
 - 选择训练环境
@@ -128,4 +119,3 @@
 
 ## 4. 效果展示
 ![](doc/simulator.gif)
-

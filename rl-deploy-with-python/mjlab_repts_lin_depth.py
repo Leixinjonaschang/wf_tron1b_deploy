@@ -42,8 +42,6 @@ DEPTH_SHAPE = (DEPTH_CHANNELS, DEPTH_HEIGHT, DEPTH_WIDTH)
 DEPTH_INPUT_SHAPE = (1, *DEPTH_SHAPE)
 DEPTH_MIN_DISTANCE_M = 0.2
 DEPTH_MAX_DISTANCE_M = 2.0
-HIDDEN_STATE_SIZE = 64
-HIDDEN_STATE_SHAPE = (1, HIDDEN_STATE_SIZE)
 GRU_HIDDEN_STATE_SIZE = 128
 GRU_HIDDEN_STATE_SHAPE = (1, GRU_HIDDEN_STATE_SIZE)
 
@@ -409,7 +407,11 @@ class _Ros1SubBackend(_BufferedRosDepthFrameSource):
             ) from exc
 
         if not rospy.core.is_initialized():
-            rospy.init_node("mjlab_repts_lin_depth_source", anonymous=True, disable_signals=True)
+            rospy.init_node(
+                "mjlab_repts_gru_lin_depth_source",
+                anonymous=True,
+                disable_signals=True,
+            )
 
         self._subscriber = rospy.Subscriber(cfg.ros_topic, Image, self._callback, queue_size=1)
 
@@ -562,8 +564,8 @@ def validate_depth_policy_interface(
     output_shapes: list[list[int]],
     metadata: dict[str, str] | None = None,
     *,
-    hidden_state_shape: tuple[int, int] = HIDDEN_STATE_SHAPE,
-    policy_name: str = "mjlab_repts_lin_depth",
+    hidden_state_shape: tuple[int, int] = GRU_HIDDEN_STATE_SHAPE,
+    policy_name: str = "mjlab_repts_gru_lin_depth",
 ) -> None:
     if (
         len(hidden_state_shape) != 2
@@ -699,7 +701,6 @@ __all__ = [
     "D435_RAW_DEPTH_WIDTH",
     "DEPTH_INPUT_SHAPE",
     "GRU_HIDDEN_STATE_SHAPE",
-    "HIDDEN_STATE_SHAPE",
     "POLICY_INPUT_NAMES",
     "POLICY_OUTPUT_NAMES",
     "POLICY_ACTION_NAMES",

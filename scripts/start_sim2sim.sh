@@ -8,7 +8,7 @@ CTRL_DIR="${REPO_DIR}/rl-deploy-with-python"
 LOG_DIR="${REPO_DIR}/logs/sim2sim"
 
 ROBOT_TYPE="${ROBOT_TYPE:-WF_TRON1B}"
-RL_TYPE="${RL_TYPE:-mjlab_repts}"
+RL_TYPE="${RL_TYPE:-mjlab_repts_lin}"
 MJLAB_SCENE="${MJLAB_SCENE:-robot.xml}"
 ROBOT_IP="${ROBOT_IP:-127.0.0.1}"
 SIM_START_DELAY="${SIM_START_DELAY:-2}"
@@ -29,8 +29,7 @@ PYTHON_CMD=()
 usage() {
   cat <<EOF
 Usage:
-  ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts scripts/start_sim2sim.sh
-  ROS_TYPE=ros1 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin_depth scripts/start_sim2sim.sh
+  ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin scripts/start_sim2sim.sh
   ROS_TYPE=ros1 ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_gru_lin_depth scripts/start_sim2sim.sh
 
 Defaults:
@@ -136,7 +135,7 @@ try_start_ros_master() {
 }
 
 is_depth_policy() {
-  [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" || "${RL_TYPE}" == "mjlab_repts_gru_lin_depth" ]]
+  [[ "${RL_TYPE}" == "mjlab_repts_gru_lin_depth" ]]
 }
 
 uses_ros_depth() {
@@ -258,15 +257,8 @@ export RL_TYPE
 export MJLAB_SCENE
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 if is_depth_policy; then
-  if [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]]; then
-    export MJLAB_DEPTH_MIN="${MJLAB_DEPTH_MIN:-0.0}"
-    export MJLAB_DEPTH_MAX="${MJLAB_DEPTH_MAX:-10.0}"
-    DEPTH_VIEW_MIN_DEFAULT="${MJLAB_DEPTH_MIN}"
-    DEPTH_VIEW_MAX_DEFAULT="${MJLAB_DEPTH_MAX}"
-  else
-    DEPTH_VIEW_MIN_DEFAULT=0.2
-    DEPTH_VIEW_MAX_DEFAULT=2.0
-  fi
+  DEPTH_VIEW_MIN_DEFAULT=0.2
+  DEPTH_VIEW_MAX_DEFAULT=2.0
   export ROS_TYPE="${ROS_TYPE:-ros1}"
   export MJLAB_DEPTH_SOURCE="${MJLAB_DEPTH_SOURCE:-ros}"
   export MJLAB_DEPTH_SINK="${MJLAB_DEPTH_SINK:-ros}"
@@ -304,12 +296,7 @@ if is_depth_policy; then
   echo "MJLAB_DEPTH_SOURCE=${MJLAB_DEPTH_SOURCE}"
   echo "MJLAB_DEPTH_SINK=${MJLAB_DEPTH_SINK}"
   echo "MJLAB_DEPTH_ROS_TOPIC=${MJLAB_DEPTH_ROS_TOPIC}"
-  if [[ "${RL_TYPE}" == "mjlab_repts_lin_depth" ]]; then
-    echo "MJLAB_DEPTH_MIN=${MJLAB_DEPTH_MIN}"
-    echo "MJLAB_DEPTH_MAX=${MJLAB_DEPTH_MAX}"
-  else
-    echo "MJLAB_DEPTH_PREPROCESSING=onnx"
-  fi
+  echo "MJLAB_DEPTH_PREPROCESSING=onnx"
   echo "MJLAB_DEPTH_VIEW_MIN=${MJLAB_DEPTH_VIEW_MIN}"
   echo "MJLAB_DEPTH_VIEW_MAX=${MJLAB_DEPTH_VIEW_MAX}"
   echo "MJLAB_DEPTH_MAX_AGE=${MJLAB_DEPTH_MAX_AGE}"

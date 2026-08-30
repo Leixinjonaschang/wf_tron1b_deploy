@@ -30,7 +30,6 @@ from mjlab_repts_lin_depth import (  # noqa: E402
     DEPTH_MAX_DISTANCE_M,
     DEPTH_MIN_DISTANCE_M,
     GRU_HIDDEN_STATE_SHAPE,
-    HIDDEN_STATE_SHAPE,
     POLICY_INPUT_NAMES,
     POLICY_OUTPUT_NAMES,
     PROPRIO_HISTORY_SHAPE,
@@ -49,13 +48,6 @@ from mjlab_repts_lin_depth import (  # noqa: E402
 
 MODEL_DIR = DEPLOY_ROOT / "controllers" / "model"
 POLICY_PATH = (
-    MODEL_DIR
-    / "WF_TRON1B"
-    / "policy"
-    / "mjlab_repts_lin_depth"
-    / "policy.onnx"
-)
-GRU_POLICY_PATH = (
     MODEL_DIR
     / "WF_TRON1B"
     / "policy"
@@ -329,52 +321,18 @@ class FakePolicySession:
             FakeIo("proprio_history", [1, 5, 28]),
             FakeIo("actor_command", [1, 3]),
             FakeIo("depth", [1, 1, 30, 45]),
-            FakeIo("hidden_state_in", [1, 64]),
+            FakeIo("hidden_state_in", list(GRU_HIDDEN_STATE_SHAPE)),
         ]
 
     def get_outputs(self):
         return [
             FakeIo("actions", [1, 8]),
             FakeIo("predicted_lin_vel", [1, 3]),
-            FakeIo("hidden_state_out", [1, 64]),
+            FakeIo("hidden_state_out", list(GRU_HIDDEN_STATE_SHAPE)),
         ]
 
     def get_modelmeta(self):
         return FakeMeta()
-
-    def run(self, output_names, inputs):
-        assert output_names == POLICY_OUTPUT_NAMES
-        assert inputs["proprio_history"].shape == (1, *PROPRIO_HISTORY_SHAPE)
-        assert inputs["actor_command"].shape == (1, 3)
-        assert inputs["depth"].shape == DEPTH_INPUT_SHAPE
-        assert inputs["hidden_state_in"].shape == HIDDEN_STATE_SHAPE
-        return [
-            np.full((1, 8), 0.25, dtype=np.float32),
-            np.array([[0.1, -0.2, 0.3]], dtype=np.float32),
-            inputs["hidden_state_in"] + np.float32(1.0),
-        ]
-
-
-class FakeGruMeta:
-    custom_metadata_map = dict(
-        FakeMeta.custom_metadata_map,
-        policy_output_names="actions,predicted_lin_vel,hidden_state_out",
-    )
-
-
-class FakeGruPolicySession(FakePolicySession):
-    def get_inputs(self):
-        inputs = super().get_inputs()
-        inputs[-1] = FakeIo("hidden_state_in", list(GRU_HIDDEN_STATE_SHAPE))
-        return inputs
-
-    def get_outputs(self):
-        outputs = super().get_outputs()
-        outputs[-1] = FakeIo("hidden_state_out", list(GRU_HIDDEN_STATE_SHAPE))
-        return outputs
-
-    def get_modelmeta(self):
-        return FakeGruMeta()
 
     def run(self, output_names, inputs):
         assert output_names == POLICY_OUTPUT_NAMES
@@ -388,30 +346,13 @@ class FakeGruPolicySession(FakePolicySession):
             inputs["hidden_state_in"] + np.float32(1.0),
         ]
 
-
 class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
-    def test_active_depth_policy_matches_expected_interface(self):
+    def test_depth_policy_matches_expected_interface(self):
         if ort is None:
             self.skipTest("onnxruntime is required to inspect policy.onnx")
 
         session = ort.InferenceSession(
             str(POLICY_PATH),
-            providers=["CPUExecutionProvider"],
-        )
-        validate_depth_policy_interface(
-            [input_info.name for input_info in session.get_inputs()],
-            [input_info.shape for input_info in session.get_inputs()],
-            [output_info.name for output_info in session.get_outputs()],
-            [output_info.shape for output_info in session.get_outputs()],
-            session.get_modelmeta().custom_metadata_map,
-        )
-
-    def test_gru_depth_policy_matches_expected_interface(self):
-        if ort is None:
-            self.skipTest("onnxruntime is required to inspect policy.onnx")
-
-        session = ort.InferenceSession(
-            str(GRU_POLICY_PATH),
             providers=["CPUExecutionProvider"],
         )
         validate_depth_policy_interface(
@@ -435,7 +376,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         )
         self.assertTrue(all(np.isfinite(output).all() for output in outputs))
 
-    def test_legacy_controller_uses_metric_depth_profile(self):
+    def test_controller_uses_onnx_depth_preprocessing_profile(self):
         wheelfoot_module = _import_wheelfoot_module()
         fake_depth_source = mock.Mock()
 
@@ -443,46 +384,6 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
             wheelfoot_module.ort,
             "InferenceSession",
             FakePolicySession,
-        ):
-            with mock.patch.object(
-                wheelfoot_module,
-                "create_depth_frame_source",
-                return_value=fake_depth_source,
-            ) as create_source:
-                with mock.patch.dict(os.environ, {}, clear=True):
-                    controller = wheelfoot_module.WheelfootController(
-                        str(MODEL_DIR),
-                        FakeRobot(),
-                        "WF_TRON1B",
-                        "mjlab_repts_lin_depth",
-                        start_controller=False,
-                    )
-
-        self.assertIs(controller.depth_source, fake_depth_source)
-        create_source.assert_called_once_with(
-            {
-                "source": "ros",
-                "ros_topic": "/camera0/depth/image_rect_raw",
-                "ros_type": "ros1",
-                "encoding": None,
-                "depth_scale": None,
-                "min_depth": 0.0,
-                "max_depth": 10.0,
-                "preprocess_in_onnx": False,
-                "timeout_s": 0.5,
-                "max_age_s": 0.5,
-                "npy_path": None,
-            }
-        )
-
-    def test_gru_controller_uses_onnx_depth_preprocessing_profile(self):
-        wheelfoot_module = _import_wheelfoot_module()
-        fake_depth_source = mock.Mock()
-
-        with mock.patch.object(
-            wheelfoot_module.ort,
-            "InferenceSession",
-            FakeGruPolicySession,
         ):
             with mock.patch.object(
                 wheelfoot_module,
@@ -649,7 +550,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         self.assertTrue(np.all(np.isfinite(depth)))
         self.assertTrue(np.all(depth >= 0.0))
 
-    def test_legacy_depth_preprocess_keeps_metric_input_semantics(self):
+    def test_deployment_side_depth_preprocess_keeps_metric_input_semantics(self):
         image = np.array(
             [[np.nan, np.inf, -np.inf, -1.0, 0.0, 0.1, 1.0, 11.0]],
             dtype=np.float32,
@@ -896,21 +797,21 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
     def test_validate_depth_policy_interface_accepts_expected_metadata(self):
         validate_depth_policy_interface(
             POLICY_INPUT_NAMES,
-            [[1, 5, 28], [1, 3], [1, 1, 30, 45], [1, 64]],
+            [[1, 5, 28], [1, 3], [1, 1, 30, 45], [1, 128]],
             POLICY_OUTPUT_NAMES,
-            [[1, 8], [1, 3], [1, 64]],
+            [[1, 8], [1, 3], [1, 128]],
             FakeMeta.custom_metadata_map,
         )
 
-    def test_validate_depth_policy_interface_accepts_legacy_two_input_metadata(self):
+    def test_validate_depth_policy_interface_accepts_two_input_export_metadata(self):
         metadata = dict(FakeMeta.custom_metadata_map)
         metadata["policy_input_names"] = "proprio_history,actor_command"
 
         validate_depth_policy_interface(
             POLICY_INPUT_NAMES,
-            [[1, 5, 28], [1, 3], [1, 1, 30, 45], [1, 64]],
+            [[1, 5, 28], [1, 3], [1, 1, 30, 45], [1, 128]],
             POLICY_OUTPUT_NAMES,
-            [[1, 8], [1, 3], [1, 64]],
+            [[1, 8], [1, 3], [1, 128]],
             metadata,
         )
 
@@ -927,9 +828,9 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "input shapes"):
             validate_depth_policy_interface(
                 POLICY_INPUT_NAMES,
-                [[1, 5, 28], [1, 3], [1, 1, 28, 48], [1, 64]],
+                [[1, 5, 28], [1, 3], [1, 1, 28, 48], [1, 128]],
                 POLICY_OUTPUT_NAMES,
-                [[1, 8], [1, 3], [1, 64]],
+                [[1, 8], [1, 3], [1, 128]],
             )
 
     def test_validate_gru_depth_policy_rejects_mismatched_hidden_output(self):
@@ -943,33 +844,13 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
                 policy_name="mjlab_repts_gru_lin_depth",
             )
 
-    def test_controller_branch_loads_depth_policy_without_encoder(self):
-        wheelfoot_module = _import_wheelfoot_module()
-
-        with mock.patch.object(wheelfoot_module.ort, "InferenceSession", FakePolicySession):
-            env = {"MJLAB_DEPTH_SOURCE": "zero"}
-            with mock.patch.dict(os.environ, env, clear=False):
-                controller = wheelfoot_module.WheelfootController(
-                    str(MODEL_DIR),
-                    FakeRobot(),
-                    "WF_TRON1B",
-                    "mjlab_repts_lin_depth",
-                    start_controller=False,
-                )
-
-        self.assertTrue(controller.config_file.endswith("params_mjlab_repts_lin_depth.yaml"))
-        self.assertIsNone(controller.model_encoder)
-        self.assertIsNone(controller.encoder_session)
-        self.assertEqual(controller.policy_input_names, POLICY_INPUT_NAMES)
-        self.assertEqual(controller.proprio_history_vector.shape, PROPRIO_HISTORY_SHAPE)
-
-    def test_controller_gru_depth_branch_reuses_config_and_feedback_state(self):
+    def test_controller_depth_branch_loads_config_and_feedback_state(self):
         wheelfoot_module = _import_wheelfoot_module()
 
         with mock.patch.object(
             wheelfoot_module.ort,
             "InferenceSession",
-            FakeGruPolicySession,
+            FakePolicySession,
         ):
             with mock.patch.dict(
                 os.environ,
@@ -987,7 +868,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         self.assertTrue(controller.is_mjlab_repts_gru_lin_depth)
         self.assertTrue(controller.is_mjlab_repts_depth)
         self.assertTrue(
-            controller.config_file.endswith("params_mjlab_repts_lin_depth.yaml")
+            controller.config_file.endswith("params_mjlab_repts_gru_lin_depth.yaml")
         )
         self.assertIsNone(controller.model_encoder)
         self.assertIsNone(controller.encoder_session)
@@ -1013,7 +894,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
                         str(MODEL_DIR),
                         FakeRobot(),
                         "WF_TRON1B",
-                        "mjlab_repts_lin_depth",
+                        "mjlab_repts_gru_lin_depth",
                         start_controller=False,
                     )
 
@@ -1040,7 +921,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         self.assertIn("depth source: RosDepthFrameSource", output.getvalue())
         np.testing.assert_allclose(
             controller.depth_hidden_state,
-            np.ones(HIDDEN_STATE_SHAPE, dtype=np.float32),
+            np.ones(GRU_HIDDEN_STATE_SHAPE, dtype=np.float32),
         )
         np.testing.assert_allclose(
             controller.predicted_lin_vel,

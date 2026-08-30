@@ -1,315 +1,286 @@
-# WF_TRON1B Sim2sim
+# WF-TRON1B Subject Locomotion Deployment
 
-本仓库常用两种 sim2sim 流程：
+## 1. 项目介绍
 
-- Perceptive depth policy：Docker + ROS1 depth topic。
-- Non-perceptive REPTS policy：宿主机 `uv` 环境直接运行，不需要 ROS。
+本项目部署面向 WF-TRON1B 的轮足 Subject Locomotion 方法。仓库包含策略模型、
+RealSense depth 接入、ONNX Runtime 推理、LimX SDK 控制、MuJoCo 仿真以及部署验证工具。
 
-## Depth-Based Perceptive Sim-to-Sim Test
+当前唯一推荐策略为：
 
-当前 depth-based policy 为 `mjlab_repts_gru_lin_depth`，GRU hidden state
-为 `[1, 128]`。Docker 一键脚本默认运行该策略。部署端传入有限的米制 depth
-（无效值为 `0 m`），`[0.2, 2.0] m` 范围处理和 `[0, 1]` 归一化已移入 ONNX。
+```text
+ROBOT_TYPE=WF_TRON1B
+RL_TYPE=mjlab_repts_gru_lin_depth
+```
 
-### 宿主机本地 ROS1 sim2sim（手动启动）
+新策略必须先通过 Sim-to-Sim，确认 observation、depth、action mapping 和 GRU hidden
+state 均符合训练时 contract，之后才能进入 Sim-to-Real。首次真机测试必须吊装，现场必须有
+可立即停止机器人的操作者。
 
-以下流程在宿主机上直接运行 MuJoCo、controller 和 ROS1 depth
-transport。首先在仓库根目录同步 Python 环境：
+## 2. 部署流程
+
+```text
+Training Export
+    → Sim-to-Sim
+    → 验证 observation / depth / action / hidden state
+    → Sim-to-Real
+```
+
+Sim-to-Sim 不是展示步骤，而是部署门禁：它用于尽早发现 ONNX 接口、关节顺序、depth
+单位、图像裁剪和 recurrent state 不一致。第 3 节全部检查通过前，不要连接真机执行策略。
+
+## 3. Sim-to-Sim
+
+### 3.1 根据宿主机选择运行方式
+
+两种方式运行相同的 simulator、controller、ROS1 depth transport 和 ONNX policy；区别
+只在于运行环境：
+
+| 宿主机 | Sim-to-Sim 方式 | 原因 |
+| --- | --- | --- |
+| Ubuntu 20.04 | 本地原生运行 | 系统原生支持 ROS1 Noetic |
+| Ubuntu 22.04 | Docker 运行 | 使用容器中的 RoboStack Noetic + Python 3.11 解决环境兼容问题 |
+
+Ubuntu 22.04 上不建议把 ROS1 Noetic 强行安装到宿主机。Docker 正是为该场景提供的兼容
+环境；宿主机不需要安装 ROS。两种方式最终必须通过第 3.4 节的同一套检查。
+
+### 3.2 Ubuntu 20.04：本地 Sim-to-Sim
+
+本地方式让 MuJoCo、ROS1、controller、depth viewer 和 joystick 全部直接运行在宿主机。
+宿主机需要 ROS1 Noetic、`uv`、图形桌面和可用的 OpenGL renderer。
+
+首次运行，在仓库根目录准备 Python 与 ROS 环境：
 
 ```bash
 uv sync
+source /opt/ros/noetic/setup.bash
+
+export ROS_MASTER_URI=http://127.0.0.1:11311
+export ROS_IP=127.0.0.1
+unset ROS_HOSTNAME
+
+uv run python -c 'import rospy, sensor_msgs.msg, mujoco, onnxruntime, limxsdk; print("local runtime OK")'
 ```
 
-#### 检查和选择宿主机 GPU renderer
+最后一条命令必须成功；否则说明当前 `uv` Python 看不到 ROS1 packages，应先修复环境。
+不要让本地 Sim-to-Sim 继承真机使用的 `ROS_MASTER_URI` 或 `ROS_IP=10.192.1.200`。
 
-MuJoCo 的物理仿真仍在 CPU 上运行，窗口和 depth image 使用当前桌面会话的
-OpenGL renderer。renderer 由启动终端的环境变量选择，不需要修改 Python
-代码。
-
-安装检查工具并查看当前 renderer：
+在同一终端执行本地一键启动命令：
 
 ```bash
-sudo apt install mesa-utils
-glxinfo -B | grep -E 'OpenGL vendor|OpenGL renderer'
-```
-
-常见结果：
-
-- `AMD RENOIR`、`Mesa Intel` 或 `AMD Radeon`：使用对应的 AMD/Intel GPU。
-- `NVIDIA GeForce ...`：使用 NVIDIA GPU。
-- `llvmpipe` 或 `softpipe`：使用 CPU 软件渲染。
-
-本机显示 `AMD RENOIR` 时已经是 AMD 核显 GPU 渲染，并非 CPU 渲染。如果
-AMD 核显性能足够，可以直接按后续命令运行。
-
-对于 AMD/Intel 核显加 NVIDIA 独显的笔记本，先确认 NVIDIA 驱动正常：
-
-```bash
-nvidia-smi
-```
-
-需要临时让整个一键 sim2sim 流程使用 NVIDIA PRIME Render Offload 时，在
-同一条启动命令前加环境变量：
-
-```bash
-__NV_PRIME_RENDER_OFFLOAD=1 \
-__GLX_VENDOR_LIBRARY_NAME=nvidia \
+ROS_TYPE=ros1 \
 ROBOT_TYPE=WF_TRON1B \
 RL_TYPE=mjlab_repts_gru_lin_depth \
 scripts/start_sim2sim.sh
 ```
 
-如果手动启动各进程，只需给 MuJoCo simulator 命令添加相同前缀：
+启动器会在需要时创建本地 ROS master，然后启动 simulator、controller、可选 depth
+viewer 和虚拟遥控器。按虚拟遥控器终端中的 `Ctrl-C` 会停止全部子进程。renderer 与
+NVIDIA PRIME 排查见 [Troubleshooting](doc/troubleshooting.md)。
+
+### 3.3 Ubuntu 22.04：Docker Sim-to-Sim
+
+Docker 镜像使用 RoboStack Noetic + Python 3.11，让 ROS1 与 MuJoCo、ONNX Runtime 和
+当前 Python 代码处于同一个兼容环境。宿主机需要 Docker 和 X11；启动脚本默认请求
+NVIDIA GPU，因此 NVIDIA 主机还需要 NVIDIA Container Toolkit。首次使用时在仓库根目录执行：
 
 ```bash
-__NV_PRIME_RENDER_OFFLOAD=1 \
-__GLX_VENDOR_LIBRARY_NAME=nvidia \
-ROBOT_TYPE=WF_TRON1B \
-RL_TYPE=mjlab_repts_gru_lin_depth \
-MJLAB_DEPTH_SINK=ros \
-uv run python pointfoot-mujoco-sim/simulator.py
-```
-
-启动前可验证 PRIME Offload 是否会选择 NVIDIA：
-
-```bash
-__NV_PRIME_RENDER_OFFLOAD=1 \
-__GLX_VENDOR_LIBRARY_NAME=nvidia \
-glxinfo -B | grep -E 'OpenGL vendor|OpenGL renderer'
-```
-
-预期 vendor 为 `NVIDIA Corporation`，renderer 为具体的 NVIDIA GPU。
-上述变量仅对当前命令生效，不会永久修改系统；不添加前缀即可恢复默认的
-AMD renderer。若 `nvidia-smi` 本身报错，应先修复 NVIDIA 驱动，再尝试
-PRIME Offload。
-
-下面每一步均在独立 Bash 终端中执行，并保持前面启动的进程持续运行。
-所有 ROS 节点必须使用同一个本地 master、本机地址和 depth topic。
-
-1. 启动本地 ROS master：
-
-```bash
-cd ~/CLX/wf_tron1b_deploy
-source /opt/ros/noetic/setup.bash
-
-env -u ROS_HOSTNAME \
-  ROS_MASTER_URI=http://127.0.0.1:11311 \
-  ROS_IP=127.0.0.1 \
-  roscore
-```
-
-2. 启动 MuJoCo simulator 并发布 depth image：
-
-```bash
-cd ~/CLX/wf_tron1b_deploy
-source /opt/ros/noetic/setup.bash
-
-env -u ROS_HOSTNAME \
-  ROS_MASTER_URI=http://127.0.0.1:11311 \
-  ROS_IP=127.0.0.1 \
-  ROBOT_TYPE=WF_TRON1B \
-  RL_TYPE=mjlab_repts_gru_lin_depth \
-  MJLAB_DEPTH_SINK=ros \
-  MJLAB_DEPTH_ROS_TOPIC=/camera/depth/image_rect_raw \
-  uv run python pointfoot-mujoco-sim/simulator.py
-```
-
-simulator 终端应显示 `sink=ros` 和
-`ros_topic=/camera/depth/image_rect_raw`。
-
-3. 确认 depth publisher 地址和帧率：
-
-```bash
-cd ~/CLX/wf_tron1b_deploy
-source /opt/ros/noetic/setup.bash
-export ROS_MASTER_URI=http://127.0.0.1:11311
-export ROS_IP=127.0.0.1
-unset ROS_HOSTNAME
-
-rostopic info /camera/depth/image_rect_raw
-rostopic hz /camera/depth/image_rect_raw
-```
-
-`rostopic info` 中的 publisher URI 应为 `http://127.0.0.1:<port>/`，
-帧率应接近 `30 Hz`。如果 publisher URI 仍为 `10.192.1.200`，说明
-simulator 启动时继承了真机调试用的 `ROS_IP`，需要停止后按第 2 步重启。
-
-4. depth topic 正常后启动 RL controller：
-
-```bash
-cd ~/CLX/wf_tron1b_deploy
-source /opt/ros/noetic/setup.bash
-
-env -u ROS_HOSTNAME \
-  ROS_MASTER_URI=http://127.0.0.1:11311 \
-  ROS_IP=127.0.0.1 \
-  ROBOT_TYPE=WF_TRON1B \
-  RL_TYPE=mjlab_repts_gru_lin_depth \
-  MJLAB_DEPTH_SOURCE=ros \
-  MJLAB_DEPTH_ROS_TOPIC=/camera/depth/image_rect_raw \
-  uv run python rl-deploy-with-python/main.py
-```
-
-5. 启动虚拟遥控器：
-
-```bash
-cd ~/CLX/wf_tron1b_deploy
-pointfoot-mujoco-sim/robot-joystick/robot-joystick
-```
-
-如果 controller 报 `timed out waiting for ROS depth image`，先重新执行第 3 步，
-确认 simulator 仍在运行、publisher URI 可访问，且 simulator 与 controller
-使用完全相同的 topic。
-
-### Docker ROS1 sim2sim
-
-在宿主机执行, 根据 Dockerfile 构建 docker 镜像：
-
-```bash
-cd wf_tron1b_deploy
-sudo -E IMAGE_NAME=tron_sim2sim:latest scripts/docker_build_ros1.sh
-```
-
-### NVIDIA GPU prerequisite (Ubuntu/Debian host)
-
-The ROS1 Docker workflow uses the host GPU for MuJoCo rendering. Before creating
-`tron_deploy`, Docker must be able to access a working NVIDIA driver (`nvidia-smi`
-must succeed on the host) and the NVIDIA Container Toolkit must be installed and
-configured. Docker itself and an NVIDIA GPU driver are host prerequisites; a CUDA
-toolkit installation is not required.
-
-Install and configure the toolkit using NVIDIA's production repository:
-
-```bash
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
-  sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-sudo apt-get update
-sudo apt-get install -y nvidia-container-toolkit
-sudo nvidia-ctk runtime configure --runtime=docker
-sudo systemctl restart docker
-```
-
-If `tron_deploy` was created before this setup, remove and recreate that persistent
-container so it receives the GPU runtime configuration:
-
-```bash
-sudo docker rm -f tron_deploy
-```
-
-After starting the container below, verify GPU access with:
-
-```bash
-sudo docker exec tron_deploy nvidia-smi
-```
-
-If Docker reports `failed to discover GPU vendor from CDI`, re-check that host
-`nvidia-smi` works, rerun `nvidia-ctk runtime configure --runtime=docker`, restart
-Docker, then recreate `tron_deploy`.
-
-
-启动持久 Docker 容器：
-
-```bash
+sudo -E scripts/docker_build_ros1.sh
 xhost +local:docker
-sudo -E IMAGE_NAME=tron_sim2sim:latest CONTAINER_NAME=tron_deploy scripts/docker_start_ros1.sh
-```
-
-进入容器：
-
-```bash
+sudo -E scripts/docker_start_ros1.sh
 sudo docker exec -it tron_deploy bash
 ```
 
-在容器内运行 sim2sim：
+进入 `tron_deploy` 容器后，一键启动 Sim-to-Sim：
 
 ```bash
 /work/scripts/docker_run_sim2sim_ros1.sh
 ```
 
-这会启动 MuJoCo、RL controller、ROS1 depth 传输、可选 depth viewer 和 joystick。
-depth topic 是：
+按运行虚拟遥控器的终端中的 `Ctrl-C`，启动器会停止本次 Sim-to-Sim 的全部子进程。
+Docker、GPU、DISPLAY 或 ROS 问题见 [Troubleshooting](doc/troubleshooting.md)。
+
+### 3.4 两种方式共同的检查项
+
+在另一个终端检查同一个 Sim-to-Sim topic。Docker 方式应进入同一个容器；本地方式应先
+source ROS1，并保持第 3.2 节的本地 ROS 网络变量：
+
+```bash
+rostopic type /camera/depth/image_rect_raw
+rostopic hz /camera/depth/image_rect_raw
+```
+
+验证 ROS1 publish/subscribe 和 policy-side depth preprocessing：
+
+```bash
+# Ubuntu 20.04 本地方式
+MJLAB_DEPTH_ROS_TOPIC=/wf_depth_smoke uv run python scripts/ros1_depth_smoke.py
+
+# Ubuntu 22.04 Docker 方式（在容器内）
+MJLAB_DEPTH_ROS_TOPIC=/wf_depth_smoke python scripts/ros1_depth_smoke.py
+```
+
+进入 Sim-to-Real 前，必须同时满足：
+
+- depth topic 类型为 `sensor_msgs/Image`，帧率稳定在约 `30 Hz`；
+- smoke test 输出 `ROS1 depth smoke passed`，预处理结果 shape 为 `[1, 1, 30, 45]`；
+- depth viewer 中图像连续更新，不冻结、不长期全零；
+- controller 启动日志显示正确的 input/output shape、action order 和 ROS depth source；
+- 日志中没有 missing/stale depth、NaN/Inf、ONNX interface mismatch 或进程提前退出；
+- 平地站立和运动稳定，指令方向、左右关节和轮速方向正确；
+- 下列回归测试全部通过：
+
+```bash
+uv run --with pytest pytest rl-deploy-with-python/tests
+```
+
+详细 Docker/ROS 操作见 [ROS1 Depth Sim-to-Sim](doc/ros1_depth_sim2sim.md)。
+
+## 4. Sim-to-Real
+
+### 4.1 安全检查
+
+- 首次部署、策略更新或 contract 变化后，机器人必须保持吊装；
+- 确认现场安全区域、急停方式和停止按键，安排专人操作遥控器；
+- 确认机器人处于开发者模式并已完成校零；
+- 确认所用 LimX SDK 与机器人本体软件版本匹配；
+- 确认第 3.4 节所有 Sim-to-Sim 检查已通过；
+- 未确认 depth、关节顺序和 action scale 前，不得启动行走。
+
+### 4.2 RealSense 与 ROS topic 检查
+
+开发电脑默认网络配置为 `10.192.1.200`，机器人默认地址为 `10.192.1.2`：
+
+```bash
+ping 10.192.1.2
+source /opt/ros/noetic/setup.bash
+export ROS_MASTER_URI=http://10.192.1.2:11311
+export ROS_IP=10.192.1.200
+unset ROS_HOSTNAME
+
+rostopic type /camera0/depth/image_rect_raw
+rostopic hz /camera0/depth/image_rect_raw
+```
+
+必须确认真实 topic 的消息类型为 `sensor_msgs/Image`、帧率稳定、画面有效。现场 topic
+如有不同，以 `rostopic list` 为准，并通过 `MJLAB_DEPTH_ROS_TOPIC` 显式覆盖。完整相机检查见
+[RealSense Depth](doc/realsense_depth.md)。
+
+### 4.3 唯一推荐启动命令
+
+在已经能够导入 `rospy`、`sensor_msgs`、`onnxruntime` 和 `limxsdk` 的 ROS1 Python
+环境中，从仓库根目录运行：
+
+```bash
+source /opt/ros/noetic/setup.bash
+export ROS_MASTER_URI=http://10.192.1.2:11311
+export ROS_IP=10.192.1.200
+unset ROS_HOSTNAME
+
+ROBOT_TYPE=WF_TRON1B \
+RL_TYPE=mjlab_repts_gru_lin_depth \
+MJLAB_DEPTH_SOURCE=ros \
+MJLAB_DEPTH_ROS_TOPIC=/camera0/depth/image_rect_raw \
+python3 rl-deploy-with-python/main.py 10.192.1.2
+```
+
+controller 连接真机后不会自动开始行走。确认吊装和校零状态后，使用遥控器
+`L1 + △`（代码中的 `L1 + Y`）启动策略。
+
+### 4.4 停止和恢复
+
+- 正常停止：先按 `L1 + □`（代码中的 `L1 + X`），等待 controller 下发安全停止命令；
+- 结束进程：机器人停止后再按 `Ctrl-C`；
+- 异常动作、depth 超时或通信异常：立即使用现场急停/停止方式，不要依赖终端操作；
+- 恢复：排除故障、重新吊装并重新完成 topic 与校零检查，然后重新启动 controller；
+- 不要用循环自启动掩盖持续崩溃或反复 depth timeout。
+
+真机安装、网络、SDK、自启动和安全细节见
+[Sim-to-Real Deployment](doc/real_robot_deployment.md)。
+
+## 5. Policy Contract
+
+当前 contract 对应：
+[policy.onnx](rl-deploy-with-python/controllers/model/WF_TRON1B/policy/mjlab_repts_gru_lin_depth/policy.onnx)。
+controller 会在启动时校验名称、shape 和 metadata；不兼容的 ONNX 会直接被拒绝。
+
+### 5.1 ONNX 输入输出
+
+| 方向 | 名称 | Shape | 含义 |
+| --- | --- | --- | --- |
+| Input | `proprio_history` | `[1, 5, 28]` | 5 帧本体感知历史，oldest-to-newest |
+| Input | `actor_command` | `[1, 3]` | 机体速度指令 |
+| Input | `depth` | `[1, 1, 30, 45]` | float32 米制 depth |
+| Input | `hidden_state_in` | `[1, 128]` | GRU 上一时刻状态 |
+| Output | `actions` | `[1, 8]` | 6 个腿关节位置 action + 2 个轮速 action |
+| Output | `predicted_lin_vel` | `[1, 3]` | 预测机体线速度 |
+| Output | `hidden_state_out` | `[1, 128]` | 传给下一 policy step 的 GRU 状态 |
+
+`proprio_history` 每帧 28 维，顺序为：`base_ang_vel(3)`、
+`projected_gravity(3)`、`joint_pos(6)`、`joint_vel(6)`、`wheel_vel(2)`、
+`actions(8)`。
+
+### 5.2 Depth contract
 
 ```text
-/camera/depth/image_rect_raw
+ROS sensor_msgs/Image
+    → 16UC1/mono16 × 0.001 转为 meters（32FC1 保持 meters）
+    → NaN / ±Inf / <= 0 编码为 invalid sentinel 0 m
+    → 480×848 左裁 128 列，得到 480×720
+    → nearest-neighbor resize 到 30×45
+    → float32 [1, 1, 30, 45]
+    → ONNX: below-min-to-max → clamp [0.2, 2.0] m → normalize [0, 1]
 ```
 
-只关闭 depth viewer：
+必须传入完整 FOV raw depth。不要在相机端预先裁成 `30×45`，否则会造成重复裁剪。
+超过 `0.5 s` 的旧帧会被拒绝。
 
-```bash
-MJLAB_DEPTH_VIEW=0 /work/scripts/docker_run_sim2sim_ros1.sh
-```
+### 5.3 Action 与 recurrent state
 
-日志：
+Policy action 顺序固定为：
 
 ```text
-/work/logs/sim2sim/
+abad_L, hip_L, knee_L, abad_R, hip_R, knee_R, wheel_L, wheel_R
 ```
 
-更多细节见：`doc/ros1_depth_sim2sim.md`。
+- 前 6 维：腿关节位置 action，scale 为 `0.5`；
+- 后 2 维：轮关节速度 action，scale 为 `10.0`；
+- action clip 为 `[-2.0, 2.0]`；
+- controller 按名称映射到 LimX SDK 的交错关节顺序，禁止按数组位置自行重排；
+- `hidden_state_in` 首帧初始化为零，此后必须把 `hidden_state_out` 原样传入下一步；
+- controller loop 为 `500 Hz`、decimation 为 `10`，policy 更新频率为 `50 Hz`。
 
-## Terrain Scenes
-
-离线地形工具位于 `utils/terrain_tool/`。修改地形定义后，在仓库根目录生成全部场景：
-
-```bash
-uv run python utils/terrain_tool/terrain_generator.py
-```
-
-生成的场景位于
-`pointfoot-mujoco-sim/robot-description/pointfoot/WF_TRON1B/xml/`：
-
-- `scene_stairs.xml`：低台阶。
-- `scene_slope.xml`：缓坡。
-- `scene_rough_ground.xml`：碎石/不平地。
-- `scene_obstacle.xml`：偏置圆柱障碍物。
-- `scene_terrain.xml`：以上四类地形的组合课程。
-
-用 `MJLAB_SCENE` 选择场景；未设置时仍使用平地 `robot.xml`。例如在 ROS1 Docker 容器内运行碎石场景：
-
-```bash
-MJLAB_SCENE=scene_rough_ground.xml /work/scripts/docker_run_sim2sim_ros1.sh
-```
-
-`scene_rough_ground.xml` 的难度定义在
-`utils/terrain_tool/terrain_generator.py` 的 `add_rough_ground_course()`：
-
-- `init_pos[2]` 与 `box_size[2]` 控制露出高度；当前约为 8–12 cm。
-- `box_size_rand[2]` 控制高度起伏。
-- `box_euler_rand` 控制随机倾角（单位为弧度）。
-- `separation` 控制块间缝隙，`nums` 控制地形覆盖范围。
-
-每次调整后重新运行生成器；它会同步更新独立碎石场景和组合场景。
-
-## Non-Perceptive Sim-to-Sim Test
-
-用于 non-perceptive policy sim2sim：`mjlab_repts_lin`。
-这个流程直接在宿主机 `uv` 环境运行，不需要 ROS。
-
-准备宿主机 Python 环境：
-
-```bash
-uv sync
-```
-### Representation TS with Linear Velocity Prediction for Blind Locomotion
-
-运行 LinVel variant：
-```bash
-export ROBOT_TYPE=WF_TRON1B && export RL_TYPE=mjlab_repts_lin && uv run python pointfoot-mujoco-sim/simulator.py 
-```
-
-```bash
-export ROBOT_TYPE=WF_TRON1B && export RL_TYPE=mjlab_repts_lin && uv run python rl-deploy-with-python/main.py 
-```
-
-```bash
-pointfoot-mujoco-sim/robot-joystick/robot-joystick
-```
-
-日志：
+## 6. Repository Structure
 
 ```text
-logs/sim2sim/
+wf_tron1b_deploy/
+├── rl-deploy-with-python/       # ONNX controller、policy contract 与测试
+├── pointfoot-mujoco-sim/        # MuJoCo simulator、WF_TRON1B 模型与虚拟遥控器
+├── scripts/                     # Docker/ROS1 启动、depth viewer 与 smoke check
+├── utils/terrain_tool/          # 离线地形场景生成器
+├── doc/                         # Sim-to-Sim、RealSense、真机和故障排查文档
+├── Dockerfile                   # 推荐 ROS1 Sim-to-Sim 环境
+└── pyproject.toml               # 宿主机 Python 依赖
 ```
+
+## 7. Detailed Documentation
+
+- [Ubuntu 22.04 ROS1 Depth Sim-to-Sim / Docker](doc/ros1_depth_sim2sim.md)
+- [RealSense D435i Depth 与 ROS topic](doc/realsense_depth.md)
+- [Sim-to-Real 真机部署](doc/real_robot_deployment.md)
+- [Troubleshooting](doc/troubleshooting.md)
+- [Legacy Compatibility](doc/legacy/README.md)
+
+## 8. Legacy Compatibility
+
+以下策略只用于历史复现或兼容性验证，不属于当前推荐部署主线：
+
+| `RL_TYPE` | 感知输入 | 当前状态 | 说明 |
+| --- | --- | --- | --- |
+| `mjlab_repts_lin` | proprioception | 兼容保留 | 无 depth 的 LinVel policy |
+| `isaacgym` | proprioception | 兼容保留 | 历史 policy + encoder 接口 |
+| `isaaclab` | proprioception | 兼容保留 | 历史 policy + encoder 接口 |
+| `mjlab_repts` | proprioception | 已退出当前入口 | 仅通过 Git 历史追溯 |
+| `mjlab_repts_lin_depth` | depth + proprioception | 已退出当前入口 | 旧 `[1,64]` recurrent policy |
+
+历史命令、差异和使用边界统一见 [doc/legacy/README.md](doc/legacy/README.md)。不要把
+legacy policy 的参数、预处理或启动命令与 `mjlab_repts_gru_lin_depth` 混用。

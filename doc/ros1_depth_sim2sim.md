@@ -1,7 +1,9 @@
 # ROS1 Depth Sim2sim README
 
-This is the recommended workflow for running WF_TRON1B sim2sim with ROS1 depth
-transport in Docker. The host does not need ROS installed.
+This is the Ubuntu 22.04 workflow for running WF_TRON1B sim2sim with ROS1 depth
+transport in Docker. ROS1 Noetic is not installed on the host; the container uses
+RoboStack Noetic with Python 3.11 so ROS and the modern deployment dependencies run
+in one compatible environment.
 
 ## What Runs
 
@@ -18,7 +20,7 @@ The repository is mounted into the container at `/work`.
 Run on the host:
 
 ```bash
-cd /media/phi/641A24011A23CF3C/ubuntu_data/CLX/project/wheeled_legged_proj/wf_tron1b_deploy
+cd wf_tron1b_deploy
 sudo -E IMAGE_NAME=tron_sim2sim:latest scripts/docker_build_ros1.sh
 ```
 

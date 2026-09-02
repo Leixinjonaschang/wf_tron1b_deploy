@@ -328,6 +328,27 @@ class MjlabRepTsLinAlignmentTest(unittest.TestCase):
             controller.predicted_lin_vel, np.array([0.4, 0.5, 0.6], dtype=np.float32)
         )
 
+    def test_controller_can_disable_command_acceleration_limit(self):
+        controller_module = _import_wheelfoot_module()
+        controller = controller_module.WheelfootController.__new__(
+            controller_module.WheelfootController
+        )
+        controller.mode = "WALK"
+        controller.command_acceleration_limit_enabled = False
+        controller.commands = np.zeros(3, dtype=np.float32)
+        controller.target_commands = np.array([1.0, -0.5, 0.8], dtype=np.float32)
+        controller.command_rate_limits = np.ones(3, dtype=np.float32)
+        controller.loop_frequency = 500
+        controller.loop_count = 0
+        controller.handle_walk_mode = mock.Mock()
+        controller.robot_cmd = object()
+        controller.robot = SimpleNamespace(publishRobotCmd=mock.Mock())
+
+        controller.update()
+
+        np.testing.assert_allclose(controller.commands, controller.target_commands)
+        controller.handle_walk_mode.assert_called_once_with()
+
     def test_controller_lin_branch_loads_config_policy_and_no_encoder(self):
         controller_module = _import_wheelfoot_module()
 
@@ -354,6 +375,7 @@ class MjlabRepTsLinAlignmentTest(unittest.TestCase):
         )
         self.assertIsNone(controller.model_encoder)
         self.assertIsNone(controller.encoder_session)
+        self.assertTrue(controller.command_acceleration_limit_enabled)
         self.assertEqual(controller.policy_input_names, ["proprio_history", "actor_command"])
         self.assertEqual(controller.proprio_history_vector.shape, LIN_PROPRIO_HISTORY_SHAPE)
         self.assertEqual(len(created_paths), 1)

@@ -17,6 +17,7 @@ from mjlab_repts import (  # noqa: E402
     clip_actions,
     command_from_joystick_axes,
     map_actions_to_sdk_joint_commands,
+    rate_limit_commands,
 )
 
 
@@ -45,6 +46,34 @@ class MjlabRepTsCommonTest(unittest.TestCase):
             max_reverse,
             np.array([-1.0, 0.0, 0.0], dtype=np.float32),
         )
+
+    def test_velocity_command_acceleration_is_rate_limited(self):
+        rate_limits = np.array([1.0, 2.0, 4.0], dtype=np.float32)
+        command = rate_limit_commands(
+            current=np.zeros(3, dtype=np.float32),
+            target=np.array([1.0, -1.0, 0.1], dtype=np.float32),
+            rate_limits=rate_limits,
+            dt=0.1,
+        )
+        np.testing.assert_allclose(command, [0.1, -0.2, 0.1])
+
+    def test_velocity_command_deceleration_is_immediate(self):
+        command = rate_limit_commands(
+            current=np.array([1.0, -1.0, 0.5], dtype=np.float32),
+            target=np.array([0.2, -0.1, 0.0], dtype=np.float32),
+            rate_limits=np.array([1.0, 2.0, 4.0], dtype=np.float32),
+            dt=0.1,
+        )
+        np.testing.assert_allclose(command, [0.2, -0.1, 0.0])
+
+    def test_velocity_command_reversal_limits_only_magnitude_increase(self):
+        reversed_command = rate_limit_commands(
+            current=np.array([0.4, -0.4, 0.4], dtype=np.float32),
+            target=np.array([-1.0, 1.0, -0.4], dtype=np.float32),
+            rate_limits=np.array([1.0, 2.0, 4.0], dtype=np.float32),
+            dt=0.1,
+        )
+        np.testing.assert_allclose(reversed_command, [-0.5, 0.6, -0.4])
 
     def test_actions_clip_to_policy_range(self):
         actions = clip_actions(

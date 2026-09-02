@@ -24,6 +24,7 @@ from mjlab_repts import (
     clip_actions,
     command_from_joystick_axes,
     map_actions_to_sdk_joint_commands,
+    rate_limit_commands,
     validate_lin_policy_interface,
     _metadata_float_array,
     _metadata_list,
@@ -240,6 +241,18 @@ class WheelfootController:
         self.imu_orientation_offset = np.array(list(config['PointfootCfg']['imu_orientation_offset'].values()))
         self.user_cmd_cfg = config['PointfootCfg']['user_cmd_scales']
         self.loop_frequency = config['PointfootCfg']['loop_frequency']
+        self.command_acceleration_limit_enabled = config['PointfootCfg'].get(
+            'command_acceleration_limit_enabled', True
+        )
+        command_rate_limits = config['PointfootCfg']['command_rate_limits']
+        self.command_rate_limits = np.array(
+            [
+                command_rate_limits['lin_vel_x'],
+                command_rate_limits['lin_vel_y'],
+                command_rate_limits['ang_vel_yaw'],
+            ],
+            dtype=np.float32,
+        )
         self.encoder_input_size = self.obs_history_length * self.observations_size
         self.mjlab_repts_history = None
         if self.is_mjlab_repts_lin:
@@ -285,6 +298,7 @@ class WheelfootController:
         self.observations = np.zeros(self.observations_size)
         self.last_actions = np.zeros(self.actions_size)
         self.commands = np.zeros(self.commands_size)  # command to the robot (e.g., velocity, rotation)
+        self.target_commands = np.zeros(self.commands_size)
         self.scaled_commands = np.zeros(self.commands_size)
         self.base_lin_vel = np.zeros(3)  # base linear velocity
         self.base_position = np.zeros(3)  # robot base position
@@ -776,6 +790,15 @@ class WheelfootController:
         if self.mode == "STAND":
             self.handle_stand_mode()
         elif self.mode == "WALK":
+            if self.command_acceleration_limit_enabled:
+                self.commands = rate_limit_commands(
+                    self.commands,
+                    self.target_commands,
+                    self.command_rate_limits,
+                    1.0 / self.loop_frequency,
+                )
+            else:
+                self.commands = self.target_commands.copy()
             self.handle_walk_mode()
         
         # Increment the loop count
@@ -833,12 +856,13 @@ class WheelfootController:
         angular_z = 1.0 if angular_z > 1.0 else (-1.0 if angular_z < -1.0 else angular_z)
 
         if self.is_mjlab_policy:
-            self.commands = command_from_joystick_axes(sensor_joy.axes)
+            self.target_commands = command_from_joystick_axes(sensor_joy.axes)
             return
 
-        self.commands[0] = linear_x * 0.5
-        self.commands[1] = linear_y * 0.5
-        self.commands[2] = angular_z * 0.5
+        self.target_commands = np.array(
+            [linear_x * 0.5, linear_y * 0.5, angular_z * 0.5],
+            dtype=np.float32,
+        )
 
     # Callback function for receiving diagnostic data
     def robot_diagnostic_callback(self, diagnostic_value: datatypes.DiagnosticValue):

@@ -271,6 +271,19 @@ def command_from_joystick_axes(axes) -> np.ndarray:
     )
 
 
+def rate_limit_commands(current, target, rate_limits, dt: float) -> np.ndarray:
+    """Limit increases in command magnitude while applying deceleration directly."""
+    current = np.asarray(current, dtype=np.float32)
+    target = np.asarray(target, dtype=np.float32)
+    rate_limits = np.asarray(rate_limits, dtype=np.float32)
+    max_delta = rate_limits * np.float32(dt)
+    current_magnitude = np.abs(current)
+    target_magnitude = np.abs(target)
+    limited_magnitude = np.minimum(target_magnitude, current_magnitude + max_delta)
+    limited_target = np.copysign(limited_magnitude, target)
+    return np.where(target_magnitude > current_magnitude, limited_target, target)
+
+
 def _metadata_list(metadata: dict[str, str], key: str) -> list[str] | None:
     value = metadata.get(key)
     if value is None:

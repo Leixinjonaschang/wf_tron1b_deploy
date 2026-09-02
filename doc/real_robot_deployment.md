@@ -59,8 +59,9 @@ topic 为 `/camera0/depth/image_rect_raw`。实际 topic 以 `rostopic list`
 为准；临时调试仍可通过 `MJLAB_DEPTH_*` 环境变量覆盖 YAML。相机 depth
 获取流程见 [realsense_depth.md](./realsense_depth.md)。
 
-该策略使用 `[1, 128]` recurrent state。部署端只提供无效值为 `0 m` 的米制
-depth，范围处理和归一化由 ONNX 完成。
+该策略使用 `[1, 128]` recurrent state。部署端先将完整 FOV 米制 depth 最近邻缩放到
+`30×53`，再左裁 8 列；非有限值和低于 `0.15 m` 的值映射为 `2.5 m`，随后裁剪到
+`[0.15, 2.5] m`。ONNX 直接消费该 float32 输入，不再执行 depth 归一化。
 
 ## Python 部署到机器人
 
@@ -87,7 +88,7 @@ export RL_TYPE=mjlab_repts_gru_lin_depth
 python3 main.py 10.192.1.2
 ```
 
-depth source、topic、量程和超时默认由
+depth source、topic、传感器 scale 和超时默认由
 `params_mjlab_repts_gru_lin_depth.yaml` 提供；现场 topic 不同时用
 `MJLAB_DEPTH_ROS_TOPIC` 显式覆盖。
 

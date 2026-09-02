@@ -53,8 +53,10 @@ Run inside the container:
 ```
 
 The launcher defaults to `mjlab_repts_gru_lin_depth`. The deployment side
-supplies finite metric depth with invalid samples encoded as `0 m`; the ONNX
-graph performs the `[0.2, 2.0] m` range mapping and `[0, 1]` normalization.
+resizes the full-FOV metric image to `30x53`, crops the leftmost 8 columns,
+maps non-finite or below-`0.15 m` samples to `2.5 m`, and clamps to
+`[0.15, 2.5] m`. The ONNX graph consumes this external float32 preprocessing
+directly and does not normalize depth.
 
 Stop sim2sim with `Ctrl-C` in the terminal running the joystick.
 

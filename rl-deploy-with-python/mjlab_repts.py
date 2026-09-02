@@ -188,6 +188,9 @@ class LinProprioHistory:
         obs = build_lin_proprio_obs(terms)
         self._frames = [obs.copy() for _ in range(self.history_length)]
 
+    def clear(self) -> None:
+        self._frames = None
+
     def update(self, terms: dict[str, np.ndarray]) -> None:
         if self._frames is None:
             self.reset(terms)

@@ -224,15 +224,17 @@ controller 会在启动时校验名称、shape 和 metadata；不兼容的 ONNX 
 ```text
 ROS sensor_msgs/Image
     → 16UC1/mono16 × 0.001 转为 meters（32FC1 保持 meters）
-    → NaN / ±Inf / <= 0 编码为 invalid sentinel 0 m
-    → 480×848 左裁 128 列，得到 480×720
-    → nearest-neighbor resize 到 30×45
+    → 完整 FOV nearest-neighbor resize 到 30×53
+    → 左裁 8 列，得到 30×45
+    → finite 且 >= 0.15 m 的值有效，其余映射为 2.5 m
+    → clamp [0.15, 2.5] m（不归一化）
     → float32 [1, 1, 30, 45]
-    → ONNX: below-min-to-max → clamp [0.2, 2.0] m → normalize [0, 1]
+    → ONNX 直接消费外部预处理结果
 ```
 
 必须传入完整 FOV raw depth。不要在相机端预先裁成 `30×45`，否则会造成重复裁剪。
-超过 `0.5 s` 的旧帧会被拒绝。
+ROS source 使用接收时的 monotonic clock 判断帧龄，超过 `0.5 s` 的旧帧会被拒绝；
+30 Hz 的最新 depth 可由多个 50 Hz policy step 复用。NPY live fallback 同样拒绝长期未更新的文件。
 
 ### 5.3 Action 与 recurrent state
 
@@ -247,7 +249,12 @@ abad_L, hip_L, knee_L, abad_R, hip_R, knee_R, wheel_L, wheel_R
 - action clip 为 `[-2.0, 2.0]`；
 - controller 按名称映射到 LimX SDK 的交错关节顺序，禁止按数组位置自行重排；
 - `hidden_state_in` 首帧初始化为零，此后必须把 `hidden_state_out` 原样传入下一步；
+- controller 启动、`STAND → WALK` 首次推理前以及 controller 停止后，会统一清空
+  hidden state、5 帧 history、last action、当前 action 和预测速度；
 - controller loop 为 `500 Hz`、decimation 为 `10`，policy 更新频率为 `50 Hz`。
+
+若 ONNX metadata 存在，controller 会校验米制 depth、`[0.15, 2.5] m`、external
+preprocessing、关节/action 顺序与 scale；metadata 为空时使用上述本地锁定契约并打印提示。
 
 ## 6. Repository Structure
 

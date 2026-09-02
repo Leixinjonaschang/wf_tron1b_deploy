@@ -91,12 +91,16 @@ def _publish_one_depth_frame(topic: str) -> None:
     msg = Image()
     msg.header.stamp = rospy.Time.now()
     msg.header.frame_id = "smoke_depth_frame"
-    msg.height = 2
-    msg.width = 2
+    raw_depth_mm = np.tile(
+        np.arange(1, 54, dtype=np.uint16) * np.uint16(100),
+        (30, 1),
+    )
+    raw_depth_mm[:, 8] = 0
+    msg.height, msg.width = raw_depth_mm.shape
     msg.encoding = "16UC1"
     msg.is_bigendian = 0
     msg.step = msg.width * 2
-    msg.data = np.array([1000, 2000, 3000, 4000], dtype="<u2").tobytes()
+    msg.data = raw_depth_mm.astype("<u2", copy=False).tobytes()
     pub.publish(msg)
 
 
@@ -121,8 +125,9 @@ def main() -> int:
         _publish_one_depth_frame(TOPIC)
         frame = source.frame()
         assert frame.shape == DEPTH_INPUT_SHAPE, frame.shape
-        np.testing.assert_allclose(frame[0, 0, 0, 0], 1.0, rtol=0.0, atol=1.0e-6)
-        np.testing.assert_allclose(frame[0, 0, -1, -1], 4.0, rtol=0.0, atol=1.0e-6)
+        np.testing.assert_allclose(frame[0, 0, 0, 0], 2.5, rtol=0.0, atol=1.0e-6)
+        np.testing.assert_allclose(frame[0, 0, 0, 1], 1.0, rtol=0.0, atol=1.0e-6)
+        np.testing.assert_allclose(frame[0, 0, -1, -1], 2.5, rtol=0.0, atol=1.0e-6)
         print(f"ROS1 depth smoke passed on {TOPIC}: shape={frame.shape}")
         return 0
     finally:

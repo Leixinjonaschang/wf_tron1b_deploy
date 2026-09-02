@@ -124,16 +124,16 @@ Sim-to-Sim 默认 topic 为 `/camera/depth/image_rect_raw`；真机默认 topic 
 
 ### depth shape 或二次裁剪错误
 
-controller 需要完整 D435 raw frame `480×848`。部署端会左裁 128 列并 resize 到
-`30×45`；不要发布已裁剪的 policy-sized depth。接口必须最终得到 float32
-`[1,1,30,45]`。
+controller 需要完整 D435 raw frame `480×848`。部署端会先以最近邻 resize 到
+`30×53`，再左裁 8 列得到 `30×45`；不要发布已裁剪的 policy-sized depth。接口必须
+最终得到 float32 `[1,1,30,45]`。
 
 ### depth 全零、全远或尺度异常
 
 - `16UC1`/`mono16` 按毫米处理，必须乘 `0.001` 转米；
 - `32FC1` 应已经是米；
-- NaN、Inf 和非正值会变为 `0 m` sentinel；
-- ONNX 会把低于 `0.2 m` 的值映射到 `2.0 m`，再执行裁剪和归一化。
+- NaN、±Inf、负数、0 和低于 `0.15 m` 的值会变为 `2.5 m`；
+- 部署端裁剪到 `[0.15, 2.5] m`，不做归一化，ONNX 直接消费米制 depth。
 
 先用 `rqt_image_view` 或仓库 depth viewer 检查原始图像，再检查 controller 日志中的
 depth min/max/mean。

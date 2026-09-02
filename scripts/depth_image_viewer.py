@@ -217,11 +217,11 @@ def config_from_env() -> DepthViewerConfig:
         ),
         min_depth=_env_float(
             "MJLAB_DEPTH_VIEW_MIN",
-            _env_float("MJLAB_DEPTH_MIN", DEFAULT_MIN_DEPTH),
+            DEFAULT_MIN_DEPTH,
         ),
         max_depth=_env_float(
             "MJLAB_DEPTH_VIEW_MAX",
-            _env_float("MJLAB_DEPTH_MAX", DEFAULT_MAX_DEPTH),
+            DEFAULT_MAX_DEPTH,
         ),
         scale=max(1, _env_int("MJLAB_DEPTH_VIEW_SCALE", DEFAULT_SCALE)),
         refresh_hz=max(1.0, _env_float("MJLAB_DEPTH_VIEW_HZ", DEFAULT_REFRESH_HZ)),

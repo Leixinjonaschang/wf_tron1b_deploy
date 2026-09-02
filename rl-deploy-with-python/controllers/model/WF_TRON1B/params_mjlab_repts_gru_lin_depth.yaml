@@ -62,7 +62,6 @@ PointfootCfg:
     ros_type: ros1
     encoding: null
     depth_scale: null
-    preprocess_in_onnx: true
     timeout_s: 0.5
     max_age_s: 0.5
     npy_path: null

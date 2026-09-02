@@ -317,6 +317,8 @@ class WheelfootController:
         while not self.start_controller:
           time.sleep(1)
 
+        self.reset_policy_state()
+
         # Initialize default joint angles for standing
         self.default_joint_angles = np.array([0.0] * len(self.joint_names))
         self.stand_percent += 1 / (self.stand_duration * self.loop_frequency)
@@ -328,6 +330,8 @@ class WheelfootController:
         while self.start_controller:
             self.update()
             rate.sleep()
+
+        self.reset_policy_state()
         
         # Reset robot command values to ensure a safe stop when exiting the loop
         self.robot_cmd.q = [0. for x in range(0, self.joint_num)]
@@ -354,7 +358,21 @@ class WheelfootController:
             self.stand_percent += 3 / (self.stand_duration * self.loop_frequency)
         else:
             # Switch to walk mode after standing
+            self.reset_policy_state()
             self.mode = "WALK"
+
+    def reset_policy_state(self):
+        """Reset all temporal policy state at a controller lifecycle boundary."""
+        if not self.is_mjlab_policy:
+            return
+        if self.mjlab_repts_history is not None:
+            self.mjlab_repts_history.clear()
+        self.proprio_history_vector.fill(0.0)
+        self.last_actions.fill(0.0)
+        self.actions.fill(0.0)
+        self.predicted_lin_vel.fill(0.0)
+        self.depth_hidden_state.fill(0.0)
+        self.mjlab_repts_policy_initialized = False
 
     # Handle the walk mode where the robot moves based on computed actions
     def handle_walk_mode(self):
@@ -464,19 +482,36 @@ class WheelfootController:
         print(tag, "outputs:", list(zip(self.policy_output_names, self.policy_output_shapes)))
         print(tag, "action order:", list(action_names))
         print(tag, "SDK joint order:", list(SDK_JOINT_NAMES))
-        print(tag, "command range: vx_body [-1, 1], vy_body [-1, 1], yaw_rate [-pi/2, pi/2]")
+        print(
+            tag,
+            "command range: vx_body [-1, 2], vy_body [-1, 1], "
+            "yaw_rate [-pi/2, pi/2]",
+        )
         print(tag, "encoder: disabled")
+        if not self.policy_metadata:
+            print(tag, "ONNX metadata: absent; using locked local deployment contract")
         if self.is_mjlab_repts_depth:
             print(tag, "depth source:", type(self.depth_source).__name__)
-            print(tag, "depth processing: metric meters (ONNX preprocessing)")
-            if self.last_depth_input is not None:
+            print(
+                tag,
+                "depth processing: external resize 30x53, crop columns 8:53, "
+                "below 0.15m to 2.5m, clip [0.15, 2.5]m",
+            )
+            depth_stats = self.depth_source.frame_stats
+            if depth_stats is not None:
                 print(
                     tag,
                     "depth input min/max/mean:",
-                    float(np.min(self.last_depth_input)),
-                    float(np.max(self.last_depth_input)),
-                    float(np.mean(self.last_depth_input)),
+                    depth_stats["min"],
+                    depth_stats["max"],
+                    depth_stats["mean"],
                 )
+            print(
+                tag,
+                "depth frame age/source timestamp:",
+                self.depth_source.frame_age_s,
+                self.depth_source.source_timestamp_s,
+            )
         if self.is_mjlab_repts_lin:
             print(tag, "predicted lin vel:", self.predicted_lin_vel)
         print(tag, "sim2sim obs noise enabled:", self.mjlab_repts_obs_noise_enabled)

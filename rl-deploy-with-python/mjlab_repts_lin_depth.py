@@ -34,14 +34,15 @@ PROPRIO_HISTORY_SHAPE = (HISTORY_LENGTH, PROPRIO_OBS_SIZE)
 DEPTH_CHANNELS = 1
 D435_RAW_DEPTH_HEIGHT = 480
 D435_RAW_DEPTH_WIDTH = 848
-D435_LEFT_CROP_PX = 128
-D435_LEFT_CROP_FRACTION = D435_LEFT_CROP_PX / D435_RAW_DEPTH_WIDTH
+DEPTH_RESIZE_HEIGHT = 30
+DEPTH_RESIZE_WIDTH = 53
+DEPTH_LEFT_CROP_PX = 8
 DEPTH_HEIGHT = 30
 DEPTH_WIDTH = 45
 DEPTH_SHAPE = (DEPTH_CHANNELS, DEPTH_HEIGHT, DEPTH_WIDTH)
 DEPTH_INPUT_SHAPE = (1, *DEPTH_SHAPE)
-DEPTH_MIN_DISTANCE_M = 0.2
-DEPTH_MAX_DISTANCE_M = 2.0
+DEPTH_MIN_DISTANCE_M = 0.15
+DEPTH_MAX_DISTANCE_M = 2.5
 GRU_HIDDEN_STATE_SIZE = 128
 GRU_HIDDEN_STATE_SHAPE = (1, GRU_HIDDEN_STATE_SIZE)
 
@@ -137,6 +138,9 @@ class ProprioHistory:
         obs = build_proprio_obs(terms)
         self._frames = [obs.copy() for _ in range(self.history_length)]
 
+    def clear(self) -> None:
+        self._frames = None
+
     def update(self, terms: dict[str, np.ndarray]) -> None:
         if self._frames is None:
             self.reset(terms)
@@ -168,87 +172,62 @@ def _resize_nearest(image: np.ndarray, height: int, width: int) -> np.ndarray:
     return image[row_idx[:, None], col_idx[None, :]]
 
 
-def _validate_depth_range(min_depth: float, max_depth: float) -> tuple[float, float]:
+def _validate_depth_scale(depth_scale: float) -> float:
     try:
-        min_depth = float(min_depth)
-        max_depth = float(max_depth)
+        depth_scale = float(depth_scale)
     except (TypeError, ValueError) as exc:
+        raise ValueError("depth_scale must be a positive finite number") from exc
+    if not np.isfinite(depth_scale) or depth_scale <= 0.0:
         raise ValueError(
-            "depth range must satisfy 0 <= min_depth < max_depth"
-        ) from exc
-    if (
-        not np.isfinite(min_depth)
-        or not np.isfinite(max_depth)
-        or min_depth < 0.0
-        or min_depth >= max_depth
-    ):
-        raise ValueError(
-            "depth range must satisfy 0 <= min_depth < max_depth, "
-            f"got ({min_depth}, {max_depth})"
+            f"depth_scale must be a positive finite number, got {depth_scale}"
         )
-    return min_depth, max_depth
+    return depth_scale
 
 
 def preprocess_depth_image(
     image,
     *,
     encoding: str | None = None,
-    target_shape: tuple[int, int] = (DEPTH_HEIGHT, DEPTH_WIDTH),
     depth_scale: float | None = None,
-    min_depth: float = DEPTH_MIN_DISTANCE_M,
-    max_depth: float = DEPTH_MAX_DISTANCE_M,
-    preprocess_in_onnx: bool = True,
-    left_crop_fraction: float = D435_LEFT_CROP_FRACTION,
 ) -> np.ndarray:
-    """Convert full-FOV raw depth to finite metric ONNX input."""
+    """Convert full-FOV raw depth to the fixed external ONNX contract."""
 
-    if not isinstance(preprocess_in_onnx, (bool, np.bool_)):
-        raise ValueError(
-            "preprocess_in_onnx must be a boolean, "
-            f"got {preprocess_in_onnx!r}"
-        )
-    if not preprocess_in_onnx:
-        min_depth, max_depth = _validate_depth_range(min_depth, max_depth)
     depth = np.asarray(image)
     if depth.ndim == 3 and depth.shape[-1] == 1:
         depth = depth[..., 0]
     if depth.ndim != 2:
         raise ValueError(f"depth image must have shape [H, W] or [H, W, 1], got {depth.shape}")
-    try:
-        left_crop_fraction = float(left_crop_fraction)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("left_crop_fraction must be in [0, 1)") from exc
-    if not np.isfinite(left_crop_fraction) or not 0.0 <= left_crop_fraction < 1.0:
-        raise ValueError("left_crop_fraction must be in [0, 1)")
+    if depth.shape == (DEPTH_HEIGHT, DEPTH_WIDTH):
+        raise ValueError(
+            "depth image already has the policy target shape; supply full-FOV raw depth"
+        )
 
     if depth_scale is None:
         if encoding in ("16UC1", "mono16"):
             depth_scale = 0.001
         else:
             depth_scale = 1.0
+    depth_scale = _validate_depth_scale(depth_scale)
 
     depth = depth.astype(np.float32) * np.float32(depth_scale)
-    if preprocess_in_onnx:
-        invalid = ~np.isfinite(depth) | (depth <= np.float32(0.0))
-        depth = np.where(invalid, np.float32(0.0), depth)
-    else:
-        depth = np.nan_to_num(
-            depth,
-            nan=np.float32(0.0),
-            posinf=np.float32(max_depth),
-            neginf=np.float32(0.0),
-        )
-        depth = np.clip(depth, np.float32(min_depth), np.float32(max_depth))
-    left_crop = int(round(depth.shape[1] * left_crop_fraction))
-    if left_crop >= depth.shape[1]:
-        raise ValueError("left_crop_fraction leaves no depth columns")
-    if depth.shape == target_shape and left_crop:
-        raise ValueError(
-            "depth image already has the policy target shape; supply full-FOV raw depth"
-        )
-    depth = depth[:, left_crop:]
-    depth = _resize_nearest(depth, target_shape[0], target_shape[1])
-    return depth.reshape(1, 1, target_shape[0], target_shape[1]).astype(np.float32, copy=False)
+    depth = _resize_nearest(depth, DEPTH_RESIZE_HEIGHT, DEPTH_RESIZE_WIDTH)
+    depth = depth[:, DEPTH_LEFT_CROP_PX:DEPTH_RESIZE_WIDTH]
+    valid = np.isfinite(depth) & (depth >= np.float32(DEPTH_MIN_DISTANCE_M))
+    depth = np.where(valid, depth, np.float32(DEPTH_MAX_DISTANCE_M))
+    depth = np.clip(
+        depth,
+        np.float32(DEPTH_MIN_DISTANCE_M),
+        np.float32(DEPTH_MAX_DISTANCE_M),
+    )
+    return np.ascontiguousarray(depth.reshape(DEPTH_INPUT_SHAPE), dtype=np.float32)
+
+
+def _depth_stats(frame: np.ndarray) -> dict[str, float]:
+    return {
+        "min": float(np.min(frame)),
+        "max": float(np.max(frame)),
+        "mean": float(np.mean(frame)),
+    }
 
 
 @dataclass
@@ -258,9 +237,6 @@ class DepthSourceConfig:
     ros_type: str | None = None
     encoding: str | None = None
     depth_scale: float | None = None
-    min_depth: float = DEPTH_MIN_DISTANCE_M
-    max_depth: float = DEPTH_MAX_DISTANCE_M
-    preprocess_in_onnx: bool = True
     timeout_s: float = 0.2
     max_age_s: float = 0.5
     npy_path: str | None = None
@@ -270,34 +246,62 @@ class DepthFrameSource:
     def frame(self) -> np.ndarray:
         raise NotImplementedError
 
+    @property
+    def frame_age_s(self) -> float | None:
+        return None
+
+    @property
+    def source_timestamp_s(self) -> float | None:
+        return None
+
+    @property
+    def frame_stats(self) -> dict[str, float] | None:
+        return None
+
     def close(self) -> None:
         pass
 
 
 class ZeroDepthFrameSource(DepthFrameSource):
-    def __init__(self, shape: tuple[int, int, int, int] = DEPTH_INPUT_SHAPE):
-        self._frame = np.zeros(shape, dtype=np.float32)
+    def __init__(self):
+        raw_far_plane = np.full(
+            (DEPTH_RESIZE_HEIGHT, DEPTH_RESIZE_WIDTH),
+            DEPTH_MAX_DISTANCE_M,
+            dtype=np.float32,
+        )
+        self._frame = preprocess_depth_image(raw_far_plane)
 
     def frame(self) -> np.ndarray:
         return self._frame
+
+    @property
+    def frame_stats(self) -> dict[str, float]:
+        return _depth_stats(self._frame)
 
 
 class NpyDepthFrameSource(DepthFrameSource):
     def __init__(self, cfg: DepthSourceConfig):
         if cfg.npy_path is None:
             raise ValueError("depth.npy_path is required when depth.source is 'npy'")
-        image = np.load(Path(cfg.npy_path))
+        path = Path(cfg.npy_path)
+        image = np.load(path)
         self._frame = preprocess_depth_image(
             image,
             encoding=cfg.encoding,
             depth_scale=cfg.depth_scale,
-            min_depth=cfg.min_depth,
-            max_depth=cfg.max_depth,
-            preprocess_in_onnx=cfg.preprocess_in_onnx,
         )
+        self._source_timestamp_s = path.stat().st_mtime_ns / 1.0e9
 
     def frame(self) -> np.ndarray:
         return self._frame
+
+    @property
+    def frame_stats(self) -> dict[str, float]:
+        return _depth_stats(self._frame)
+
+    @property
+    def source_timestamp_s(self) -> float:
+        return self._source_timestamp_s
 
 
 class NpyLiveDepthFrameSource(DepthFrameSource):
@@ -310,9 +314,12 @@ class NpyLiveDepthFrameSource(DepthFrameSource):
         self._path = Path(cfg.npy_path)
         self._latest_frame: np.ndarray | None = None
         self._latest_mtime_ns: int | None = None
+        self._latest_recv_monotonic_s: float | None = None
+        self._latest_source_timestamp_s: float | None = None
+        self._latest_stats: dict[str, float] | None = None
 
     def frame(self) -> np.ndarray:
-        deadline = time.time() + max(self._cfg.timeout_s, 0.0)
+        deadline = time.monotonic() + max(self._cfg.timeout_s, 0.0)
         while True:
             if self._path.exists():
                 stat = self._path.stat()
@@ -322,15 +329,39 @@ class NpyLiveDepthFrameSource(DepthFrameSource):
                         image,
                         encoding=self._cfg.encoding,
                         depth_scale=self._cfg.depth_scale,
-                        min_depth=self._cfg.min_depth,
-                        max_depth=self._cfg.max_depth,
-                        preprocess_in_onnx=self._cfg.preprocess_in_onnx,
                     )
                     self._latest_mtime_ns = stat.st_mtime_ns
+                    self._latest_recv_monotonic_s = time.monotonic()
+                    self._latest_source_timestamp_s = stat.st_mtime_ns / 1.0e9
+                    self._latest_stats = _depth_stats(self._latest_frame)
+                age_s = self.frame_age_s
+                if (
+                    age_s is not None
+                    and self._cfg.max_age_s >= 0.0
+                    and age_s > self._cfg.max_age_s
+                ):
+                    raise TimeoutError(
+                        f"stale depth frame file {self._path}: age {age_s:.3f}s "
+                        f"exceeds {self._cfg.max_age_s:.3f}s"
+                    )
                 return self._latest_frame
-            if time.time() >= deadline:
+            if time.monotonic() >= deadline:
                 raise TimeoutError(f"timed out waiting for depth frame file {self._path}")
             time.sleep(0.001)
+
+    @property
+    def frame_age_s(self) -> float | None:
+        if self._latest_recv_monotonic_s is None:
+            return None
+        return max(0.0, time.monotonic() - self._latest_recv_monotonic_s)
+
+    @property
+    def source_timestamp_s(self) -> float | None:
+        return self._latest_source_timestamp_s
+
+    @property
+    def frame_stats(self) -> dict[str, float] | None:
+        return None if self._latest_stats is None else dict(self._latest_stats)
 
 
 def _resolve_ros_type(explicit: str | None = None) -> str:
@@ -359,39 +390,77 @@ class _BufferedRosDepthFrameSource(DepthFrameSource):
         self._cfg = cfg
         self._lock = threading.Lock()
         self._latest_frame: np.ndarray | None = None
-        self._latest_recv_time_s: float | None = None
+        self._latest_recv_monotonic_s: float | None = None
+        self._latest_source_timestamp_s: float | None = None
+        self._latest_stats: dict[str, float] | None = None
 
     def _callback(self, msg) -> None:
         frame = _ros_image_to_depth_input(
             msg,
             encoding_override=self._cfg.encoding,
             depth_scale=self._cfg.depth_scale,
-            min_depth=self._cfg.min_depth,
-            max_depth=self._cfg.max_depth,
-            preprocess_in_onnx=self._cfg.preprocess_in_onnx,
         )
-        recv_time_s = time.time()
+        recv_monotonic_s = time.monotonic()
+        source_timestamp_s = _ros_header_timestamp_s(msg)
         with self._lock:
             self._latest_frame = frame
-            self._latest_recv_time_s = recv_time_s
+            self._latest_recv_monotonic_s = recv_monotonic_s
+            self._latest_source_timestamp_s = source_timestamp_s
+            self._latest_stats = _depth_stats(frame)
 
     def frame(self) -> np.ndarray:
-        deadline = time.time() + max(self._cfg.timeout_s, 0.0)
+        deadline = time.monotonic() + max(self._cfg.timeout_s, 0.0)
         while True:
             with self._lock:
                 if self._latest_frame is not None:
-                    age_s = time.time() - (self._latest_recv_time_s or 0.0)
+                    age_s = self._frame_age_s_locked()
                     if self._cfg.max_age_s >= 0.0 and age_s > self._cfg.max_age_s:
                         raise TimeoutError(
                             f"stale ROS depth image on {self._cfg.ros_topic}: "
                             f"age {age_s:.3f}s exceeds {self._cfg.max_age_s:.3f}s"
                         )
                     return self._latest_frame
-            if time.time() >= deadline:
+            if time.monotonic() >= deadline:
                 raise TimeoutError(
                     f"timed out waiting for ROS depth image on {self._cfg.ros_topic}"
                 )
             time.sleep(0.001)
+
+    def _frame_age_s_locked(self) -> float:
+        if self._latest_recv_monotonic_s is None:
+            return 0.0
+        return max(0.0, time.monotonic() - self._latest_recv_monotonic_s)
+
+    @property
+    def frame_age_s(self) -> float | None:
+        with self._lock:
+            if self._latest_recv_monotonic_s is None:
+                return None
+            return self._frame_age_s_locked()
+
+    @property
+    def source_timestamp_s(self) -> float | None:
+        with self._lock:
+            return self._latest_source_timestamp_s
+
+    @property
+    def frame_stats(self) -> dict[str, float] | None:
+        with self._lock:
+            return None if self._latest_stats is None else dict(self._latest_stats)
+
+
+def _ros_header_timestamp_s(msg) -> float | None:
+    stamp = getattr(getattr(msg, "header", None), "stamp", None)
+    if stamp is None:
+        return None
+    to_sec = getattr(stamp, "to_sec", None)
+    if callable(to_sec):
+        return float(to_sec())
+    secs = getattr(stamp, "secs", None)
+    nsecs = getattr(stamp, "nsecs", None)
+    if secs is None:
+        return None
+    return float(secs) + float(nsecs or 0) * 1.0e-9
 
 
 class _Ros1SubBackend(_BufferedRosDepthFrameSource):
@@ -430,6 +499,18 @@ class RosDepthFrameSource(DepthFrameSource):
 
     def frame(self) -> np.ndarray:
         return self._backend.frame()
+
+    @property
+    def frame_age_s(self) -> float | None:
+        return self._backend.frame_age_s
+
+    @property
+    def source_timestamp_s(self) -> float | None:
+        return self._backend.source_timestamp_s
+
+    @property
+    def frame_stats(self) -> dict[str, float] | None:
+        return self._backend.frame_stats
 
     def close(self) -> None:
         self._backend.close()
@@ -478,6 +559,7 @@ def ros_image_to_depth_meters(
             depth_scale = 0.001
         else:
             depth_scale = 1.0
+    depth_scale = _validate_depth_scale(depth_scale)
     depth = image.astype(np.float32) * np.float32(depth_scale)
     return depth
 
@@ -487,12 +569,7 @@ def _ros_image_to_depth_input(
     *,
     encoding_override: str | None = None,
     depth_scale: float | None = None,
-    min_depth: float = DEPTH_MIN_DISTANCE_M,
-    max_depth: float = DEPTH_MAX_DISTANCE_M,
-    preprocess_in_onnx: bool = True,
-    left_crop_fraction: float = D435_LEFT_CROP_FRACTION,
 ) -> np.ndarray:
-    encoding = encoding_override or msg.encoding
     image = ros_image_to_depth_meters(
         msg,
         encoding_override=encoding_override,
@@ -500,12 +577,7 @@ def _ros_image_to_depth_input(
     )
     return preprocess_depth_image(
         image,
-        encoding=encoding if depth_scale is None else None,
         depth_scale=1.0,
-        min_depth=min_depth,
-        max_depth=max_depth,
-        preprocess_in_onnx=preprocess_in_onnx,
-        left_crop_fraction=left_crop_fraction,
     )
 
 
@@ -523,8 +595,6 @@ def create_depth_frame_source(config: dict | None) -> DepthFrameSource:
             cfg_data[key] = value
     for key, env_name in (
         ("depth_scale", "MJLAB_DEPTH_SCALE"),
-        ("min_depth", "MJLAB_DEPTH_MIN"),
-        ("max_depth", "MJLAB_DEPTH_MAX"),
         ("timeout_s", "MJLAB_DEPTH_TIMEOUT"),
         ("max_age_s", "MJLAB_DEPTH_MAX_AGE"),
     ):
@@ -533,8 +603,6 @@ def create_depth_frame_source(config: dict | None) -> DepthFrameSource:
             cfg_data[key] = float(value)
 
     cfg = DepthSourceConfig(**cfg_data)
-    if not cfg.preprocess_in_onnx:
-        _validate_depth_range(cfg.min_depth, cfg.max_depth)
     if cfg.source == "zero":
         return ZeroDepthFrameSource()
     if cfg.source == "npy":
@@ -612,8 +680,35 @@ def validate_depth_policy_interface(
             f"{expected_output_shapes}, got {output_shapes}"
         )
 
-    if metadata is None:
+    if not metadata:
         return
+
+    required_metadata = (
+        "joint_names",
+        "action_target_names",
+        "action_scale",
+        "depth_input_dtype",
+        "depth_input_unit",
+        "depth_input_shape",
+        "depth_input_range",
+        "depth_invalid_value",
+        "depth_min_m",
+        "depth_max_m",
+        "depth_preprocessing",
+    )
+    missing_metadata = [key for key in required_metadata if key not in metadata]
+    if missing_metadata:
+        raise ValueError(
+            f"{policy_name} ONNX metadata is missing required depth contract keys: "
+            f"{missing_metadata}"
+        )
+
+    joint_names = _metadata_list(metadata, "joint_names")
+    if joint_names != list(POLICY_ACTION_NAMES):
+        raise ValueError(
+            f"{policy_name} ONNX metadata joint_names must be "
+            f"{list(POLICY_ACTION_NAMES)}, got {joint_names}"
+        )
 
     student_observation_names = _metadata_list(metadata, "student_observation_names")
     if student_observation_names is not None and student_observation_names != list(PROPRIO_TERM_ORDER):
@@ -630,26 +725,17 @@ def validate_depth_policy_interface(
         )
 
     policy_input_names = _metadata_list(metadata, "policy_input_names")
-    legacy_metadata_input_names = POLICY_INPUT_NAMES[:2]
-    if (
-        policy_input_names is not None
-        and policy_input_names != POLICY_INPUT_NAMES
-        and policy_input_names != legacy_metadata_input_names
-    ):
+    if policy_input_names is not None and policy_input_names != POLICY_INPUT_NAMES:
         raise ValueError(
             f"{policy_name} ONNX metadata policy_input_names must be "
-            f"{POLICY_INPUT_NAMES} or legacy {legacy_metadata_input_names}, got {policy_input_names}"
+            f"{POLICY_INPUT_NAMES}, got {policy_input_names}"
         )
 
     policy_output_names = _metadata_list(metadata, "policy_output_names")
-    if (
-        policy_output_names is not None
-        and policy_output_names != POLICY_OUTPUT_NAMES[:2]
-        and policy_output_names != POLICY_OUTPUT_NAMES
-    ):
+    if policy_output_names is not None and policy_output_names != POLICY_OUTPUT_NAMES:
         raise ValueError(
             f"{policy_name} ONNX metadata policy_output_names must be "
-            f"{POLICY_OUTPUT_NAMES[:2]} or {POLICY_OUTPUT_NAMES}, got {policy_output_names}"
+            f"{POLICY_OUTPUT_NAMES}, got {policy_output_names}"
         )
 
     student_history_length = metadata.get("student_history_length")
@@ -691,15 +777,75 @@ def validate_depth_policy_interface(
                 f"{list(POLICY_ACTION_SCALES)}, got {action_scale.tolist()}"
             )
 
+    depth_input_dtype = metadata["depth_input_dtype"]
+    if depth_input_dtype != "float32":
+        raise ValueError(
+            f"{policy_name} ONNX metadata depth_input_dtype must be float32, "
+            f"got {depth_input_dtype}"
+        )
+
+    depth_input_unit = metadata["depth_input_unit"]
+    if depth_input_unit != "m":
+        raise ValueError(
+            f"{policy_name} ONNX metadata depth_input_unit must be m, "
+            f"got {depth_input_unit}"
+        )
+
+    depth_input_shape = [
+        int(value)
+        for value in _metadata_list(metadata, "depth_input_shape") or []
+    ]
+    if depth_input_shape != list(DEPTH_INPUT_SHAPE):
+        raise ValueError(
+            f"{policy_name} ONNX metadata depth_input_shape must be "
+            f"{list(DEPTH_INPUT_SHAPE)}, got {depth_input_shape}"
+        )
+
+    expected_depth_range = np.asarray(
+        [DEPTH_MIN_DISTANCE_M, DEPTH_MAX_DISTANCE_M], dtype=np.float32
+    )
+    depth_input_range = _metadata_float_array(metadata, "depth_input_range")
+    if (
+        depth_input_range is None
+        or depth_input_range.shape != expected_depth_range.shape
+        or not np.allclose(depth_input_range, expected_depth_range)
+    ):
+        raise ValueError(
+            f"{policy_name} ONNX metadata depth_input_range must be "
+            f"{expected_depth_range.tolist()}, got "
+            f"{None if depth_input_range is None else depth_input_range.tolist()}"
+        )
+
+    for key, expected in (
+        ("depth_invalid_value", DEPTH_MAX_DISTANCE_M),
+        ("depth_min_m", DEPTH_MIN_DISTANCE_M),
+        ("depth_max_m", DEPTH_MAX_DISTANCE_M),
+    ):
+        actual = float(metadata[key])
+        if not np.isclose(actual, expected):
+            raise ValueError(
+                f"{policy_name} ONNX metadata {key} must be {expected}, got {actual}"
+            )
+
+    expected_preprocessing = "external:below_min_to_max,clamp"
+    if metadata["depth_preprocessing"] != expected_preprocessing:
+        raise ValueError(
+            f"{policy_name} ONNX metadata depth_preprocessing must be "
+            f"{expected_preprocessing}, got {metadata['depth_preprocessing']}"
+        )
+
 
 __all__ = [
     "ACTION_CLIP",
     "DEFAULT_OBS_NOISE_RANGES",
-    "D435_LEFT_CROP_FRACTION",
-    "D435_LEFT_CROP_PX",
     "D435_RAW_DEPTH_HEIGHT",
     "D435_RAW_DEPTH_WIDTH",
     "DEPTH_INPUT_SHAPE",
+    "DEPTH_LEFT_CROP_PX",
+    "DEPTH_MAX_DISTANCE_M",
+    "DEPTH_MIN_DISTANCE_M",
+    "DEPTH_RESIZE_HEIGHT",
+    "DEPTH_RESIZE_WIDTH",
     "GRU_HIDDEN_STATE_SHAPE",
     "POLICY_INPUT_NAMES",
     "POLICY_OUTPUT_NAMES",

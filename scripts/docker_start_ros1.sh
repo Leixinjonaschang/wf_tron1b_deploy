@@ -7,8 +7,8 @@ IMAGE_NAME="${IMAGE_NAME:-tron_sim2sim:latest}"
 CONTAINER_NAME="${CONTAINER_NAME:-tron_deploy}"
 NVIDIA_GPU="${NVIDIA_GPU:-all}"
 RL_TYPE_VALUE="${RL_TYPE:-mjlab_repts_gru_lin_depth}"
-DEPTH_VIEW_MIN_DEFAULT=0.2
-DEPTH_VIEW_MAX_DEFAULT=2.0
+DEPTH_VIEW_MIN_DEFAULT=0.15
+DEPTH_VIEW_MAX_DEFAULT=2.5
 
 if docker container inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
   if [[ "$(docker inspect -f '{{.State.Running}}' "${CONTAINER_NAME}")" == "true" ]]; then

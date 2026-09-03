@@ -704,10 +704,10 @@ def validate_depth_policy_interface(
         )
 
     joint_names = _metadata_list(metadata, "joint_names")
-    if joint_names != list(POLICY_ACTION_NAMES):
+    if joint_names != list(SDK_JOINT_NAMES):
         raise ValueError(
             f"{policy_name} ONNX metadata joint_names must be "
-            f"{list(POLICY_ACTION_NAMES)}, got {joint_names}"
+            f"{list(SDK_JOINT_NAMES)}, got {joint_names}"
         )
 
     student_observation_names = _metadata_list(metadata, "student_observation_names")
@@ -791,14 +791,17 @@ def validate_depth_policy_interface(
             f"got {depth_input_unit}"
         )
 
-    depth_input_shape = [
-        int(value)
-        for value in _metadata_list(metadata, "depth_input_shape") or []
-    ]
-    if depth_input_shape != list(DEPTH_INPUT_SHAPE):
+    depth_input_shape = _metadata_float_array(metadata, "depth_input_shape")
+    expected_depth_shape = np.asarray(DEPTH_INPUT_SHAPE, dtype=np.float32)
+    if (
+        depth_input_shape is None
+        or depth_input_shape.shape != expected_depth_shape.shape
+        or not np.array_equal(depth_input_shape, expected_depth_shape)
+    ):
         raise ValueError(
             f"{policy_name} ONNX metadata depth_input_shape must be "
-            f"{list(DEPTH_INPUT_SHAPE)}, got {depth_input_shape}"
+            f"{list(DEPTH_INPUT_SHAPE)}, got "
+            f"{None if depth_input_shape is None else depth_input_shape.tolist()}"
         )
 
     expected_depth_range = np.asarray(

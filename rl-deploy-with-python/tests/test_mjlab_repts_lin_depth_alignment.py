@@ -46,6 +46,7 @@ from mjlab_repts_lin_depth import (  # noqa: E402
     _resolve_ros_type,
     _ros_image_to_depth_input,
 )
+from mjlab_repts import SDK_JOINT_NAMES  # noqa: E402
 
 
 MODEL_DIR = DEPLOY_ROOT / "controllers" / "model"
@@ -301,11 +302,7 @@ class FakeIo:
 
 class FakeMeta:
     custom_metadata_map = {
-        "joint_names": (
-            "abad_L_Joint,hip_L_Joint,knee_L_Joint,"
-            "abad_R_Joint,hip_R_Joint,knee_R_Joint,"
-            "wheel_L_Joint,wheel_R_Joint"
-        ),
+        "joint_names": ",".join(SDK_JOINT_NAMES),
         "student_observation_names": ",".join(PROPRIO_TERM_ORDER),
         "command_observation_names": "command",
         "policy_input_names": ",".join(POLICY_INPUT_NAMES),
@@ -321,7 +318,7 @@ class FakeMeta:
         "action_scale": "0.5,0.5,0.5,0.5,0.5,0.5,10.0,10.0",
         "depth_input_dtype": "float32",
         "depth_input_unit": "m",
-        "depth_input_shape": "1,1,30,45",
+        "depth_input_shape": "1.000,1.000,30.000,45.000",
         "depth_input_range": "0.15,2.5",
         "depth_invalid_value": "2.5",
         "depth_min_m": "0.15",

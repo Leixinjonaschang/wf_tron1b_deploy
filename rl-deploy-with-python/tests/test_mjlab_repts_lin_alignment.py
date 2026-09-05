@@ -31,6 +31,7 @@ from mjlab_repts import (  # noqa: E402
     PROPRIO_TERM_ORDER,
     TERM_DIMS,
     LinProprioHistory,
+    build_actor_terms,
     build_lin_proprio_obs,
     validate_lin_policy_interface,
 )
@@ -247,6 +248,21 @@ class MjlabRepTsLinAlignmentTest(unittest.TestCase):
             offset += dim
         self.assertEqual(offset, 28)
         self.assertNotIn(101.0, proprio_obs)
+
+    def test_lin_wheel_velocity_uses_training_observation_scale(self):
+        joint_vel = np.arange(8, dtype=np.float32)
+        terms = build_actor_terms(
+            base_ang_vel=np.zeros(3, dtype=np.float32),
+            projected_gravity=np.zeros(3, dtype=np.float32),
+            joint_pos=np.zeros(8, dtype=np.float32),
+            joint_vel=joint_vel,
+            default_joint_pos=np.zeros(8, dtype=np.float32),
+            default_joint_vel=np.zeros(8, dtype=np.float32),
+            last_action=np.zeros(8, dtype=np.float32),
+            command=np.zeros(3, dtype=np.float32),
+        )
+
+        np.testing.assert_allclose(terms["wheel_vel"], joint_vel[[3, 7]] * 0.05)
 
     def test_lin_proprio_history_is_oldest_to_newest_and_backfills_first_frame(self):
         history = LinProprioHistory()

@@ -507,7 +507,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
             proprio_obs[12:18],
             (joint_vel[leg_joint_indexes] - default_joint_vel[leg_joint_indexes]) * 0.05,
         )
-        np.testing.assert_allclose(proprio_obs[18:20], joint_vel[[3, 7]] * 0.5)
+        np.testing.assert_allclose(proprio_obs[18:20], joint_vel[[3, 7]] * 0.05)
         np.testing.assert_allclose(proprio_obs[20:28], last_action)
 
     def test_proprio_history_is_oldest_to_newest(self):

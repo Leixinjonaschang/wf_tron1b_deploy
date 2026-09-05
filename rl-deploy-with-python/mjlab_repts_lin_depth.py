@@ -113,7 +113,7 @@ def build_proprio_terms(
         "projected_gravity": projected_gravity,
         "joint_pos": joint_pos_rel,
         "joint_vel": joint_vel_rel * np.float32(0.05),
-        "wheel_vel": wheel_vel * np.float32(0.5),
+        "wheel_vel": wheel_vel * np.float32(0.05),
         "actions": _vector("last_action", last_action, 8),
     }
 

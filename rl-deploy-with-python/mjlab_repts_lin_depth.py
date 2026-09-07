@@ -43,6 +43,8 @@ DEPTH_SHAPE = (DEPTH_CHANNELS, DEPTH_HEIGHT, DEPTH_WIDTH)
 DEPTH_INPUT_SHAPE = (1, *DEPTH_SHAPE)
 DEPTH_MIN_DISTANCE_M = 0.15
 DEPTH_MAX_DISTANCE_M = 2.5
+DEPTH_GAUSSIAN_BLUR_KERNEL_SIZE = (3, 3)
+DEPTH_GAUSSIAN_BLUR_SIGMA = 1.0
 GRU_HIDDEN_STATE_SIZE = 128
 GRU_HIDDEN_STATE_SHAPE = (1, GRU_HIDDEN_STATE_SIZE)
 
@@ -189,6 +191,7 @@ def preprocess_depth_image(
     *,
     encoding: str | None = None,
     depth_scale: float | None = None,
+    apply_gaussian_blur: bool = True,
 ) -> np.ndarray:
     """Convert full-FOV raw depth to the fixed external ONNX contract."""
 
@@ -219,6 +222,20 @@ def preprocess_depth_image(
         np.float32(DEPTH_MIN_DISTANCE_M),
         np.float32(DEPTH_MAX_DISTANCE_M),
     )
+    if apply_gaussian_blur:
+        from scipy.ndimage import gaussian_filter
+
+        depth = gaussian_filter(
+            depth,
+            sigma=DEPTH_GAUSSIAN_BLUR_SIGMA,
+            radius=DEPTH_GAUSSIAN_BLUR_KERNEL_SIZE[0] // 2,
+            mode="reflect",
+        )
+    depth = np.clip(
+        depth,
+        np.float32(DEPTH_MIN_DISTANCE_M),
+        np.float32(DEPTH_MAX_DISTANCE_M),
+    )
     return np.ascontiguousarray(depth.reshape(DEPTH_INPUT_SHAPE), dtype=np.float32)
 
 
@@ -240,6 +257,7 @@ class DepthSourceConfig:
     timeout_s: float = 0.2
     max_age_s: float = 0.5
     npy_path: str | None = None
+    apply_gaussian_blur: bool = True
 
 
 class DepthFrameSource:
@@ -289,6 +307,7 @@ class NpyDepthFrameSource(DepthFrameSource):
             image,
             encoding=cfg.encoding,
             depth_scale=cfg.depth_scale,
+            apply_gaussian_blur=cfg.apply_gaussian_blur,
         )
         self._source_timestamp_s = path.stat().st_mtime_ns / 1.0e9
 
@@ -329,6 +348,7 @@ class NpyLiveDepthFrameSource(DepthFrameSource):
                         image,
                         encoding=self._cfg.encoding,
                         depth_scale=self._cfg.depth_scale,
+                        apply_gaussian_blur=self._cfg.apply_gaussian_blur,
                     )
                     self._latest_mtime_ns = stat.st_mtime_ns
                     self._latest_recv_monotonic_s = time.monotonic()
@@ -399,6 +419,7 @@ class _BufferedRosDepthFrameSource(DepthFrameSource):
             msg,
             encoding_override=self._cfg.encoding,
             depth_scale=self._cfg.depth_scale,
+            apply_gaussian_blur=self._cfg.apply_gaussian_blur,
         )
         recv_monotonic_s = time.monotonic()
         source_timestamp_s = _ros_header_timestamp_s(msg)
@@ -569,6 +590,7 @@ def _ros_image_to_depth_input(
     *,
     encoding_override: str | None = None,
     depth_scale: float | None = None,
+    apply_gaussian_blur: bool = True,
 ) -> np.ndarray:
     image = ros_image_to_depth_meters(
         msg,
@@ -578,6 +600,7 @@ def _ros_image_to_depth_input(
     return preprocess_depth_image(
         image,
         depth_scale=1.0,
+        apply_gaussian_blur=apply_gaussian_blur,
     )
 
 

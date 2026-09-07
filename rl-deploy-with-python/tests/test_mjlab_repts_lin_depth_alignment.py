@@ -26,6 +26,8 @@ from mjlab_repts_lin_depth import (  # noqa: E402
     D435_RAW_DEPTH_HEIGHT,
     D435_RAW_DEPTH_WIDTH,
     DEPTH_INPUT_SHAPE,
+    DEPTH_GAUSSIAN_BLUR_KERNEL_SIZE,
+    DEPTH_GAUSSIAN_BLUR_SIGMA,
     DEPTH_LEFT_CROP_PX,
     DEPTH_MAX_DISTANCE_M,
     DEPTH_MIN_DISTANCE_M,
@@ -539,7 +541,9 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
             30000,
         ]
 
-        depth = preprocess_depth_image(image, encoding="16UC1")
+        depth = preprocess_depth_image(
+            image, encoding="16UC1", apply_gaussian_blur=False
+        )
 
         self.assertEqual(depth.shape, DEPTH_INPUT_SHAPE)
         np.testing.assert_allclose(
@@ -557,7 +561,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         )
         image[0, DEPTH_LEFT_CROP_PX:DEPTH_LEFT_CROP_PX + samples.size] = samples
 
-        depth = preprocess_depth_image(image)
+        depth = preprocess_depth_image(image, apply_gaussian_blur=False)
 
         self.assertEqual(depth.dtype, np.float32)
         self.assertTrue(depth.flags.c_contiguous)
@@ -576,7 +580,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
             (D435_RAW_DEPTH_HEIGHT, 1),
         )
 
-        depth = preprocess_depth_image(raw)
+        depth = preprocess_depth_image(raw, apply_gaussian_blur=False)
 
         row_idx = (
             np.linspace(0, raw.shape[0] - 1, DEPTH_RESIZE_HEIGHT)
@@ -603,7 +607,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
     def test_depth_preprocess_crops_training_shape_to_policy_shape(self):
         raw = np.tile(np.linspace(0.15, 2.5, 53, dtype=np.float32), (30, 1))
 
-        depth = preprocess_depth_image(raw)
+        depth = preprocess_depth_image(raw, apply_gaussian_blur=False)
 
         self.assertEqual(depth.shape, DEPTH_INPUT_SHAPE)
         expected = raw[:, 8:]
@@ -636,7 +640,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
             dtype=np.uint16,
         ).tobytes()
 
-        depth = _ros_image_to_depth_input(msg)
+        depth = _ros_image_to_depth_input(msg, apply_gaussian_blur=False)
 
         self.assertEqual(depth.shape, (1, 1, 30, 45))
         np.testing.assert_allclose(depth[0, 0, 0, 0], 1.0)
@@ -688,7 +692,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         msg.step = msg.width * np.dtype(np.float32).itemsize
         msg.data = raw.tobytes()
 
-        depth = _ros_image_to_depth_input(msg)
+        depth = _ros_image_to_depth_input(msg, apply_gaussian_blur=False)
 
         self.assertEqual(depth.shape, DEPTH_INPUT_SHAPE)
         self.assertTrue(np.all(np.isfinite(depth)))
@@ -803,6 +807,20 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
             with self.assertRaisesRegex(TimeoutError, "stale depth frame file"):
                 source.frame()
 
+    def test_preprocess_depth_image_applies_gaussian_blur(self):
+        raw = np.ones((30, 53), dtype=np.float32)
+        raw[15, 20] = 2.0
+
+        frame = preprocess_depth_image(raw)
+        blurred = frame[0, 0]
+        center = 12
+
+        self.assertEqual(DEPTH_GAUSSIAN_BLUR_KERNEL_SIZE, (3, 3))
+        self.assertEqual(DEPTH_GAUSSIAN_BLUR_SIGMA, 1.0)
+        self.assertLess(float(blurred[15, center]), 2.0)
+        self.assertGreater(float(blurred[15, center - 1]), 1.0)
+        self.assertTrue(np.isfinite(frame).all())
+
     def test_static_npy_source_uses_fixed_depth_preprocessing(self):
         lin_depth = importlib.import_module("mjlab_repts_lin_depth")
         raw = np.full((30, 53), 1.0, dtype=np.float32)
@@ -811,7 +829,11 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
             path = Path(tmp_dir) / "depth.npy"
             np.save(path, raw)
             source = lin_depth.create_depth_frame_source(
-                {"source": "npy", "npy_path": str(path)}
+                {
+                    "source": "npy",
+                    "npy_path": str(path),
+                    "apply_gaussian_blur": False,
+                }
             )
 
         np.testing.assert_allclose(source.frame()[0, 0, :, 0], 2.5)

@@ -122,7 +122,7 @@ MJLAB_DEPTH_ROS_TOPIC=/wf_depth_smoke python scripts/ros1_depth_smoke.py
 进入 Sim-to-Real 前，必须同时满足：
 
 - depth topic 类型为 `sensor_msgs/Image`，帧率稳定在约 `30 Hz`；
-- smoke test 输出 `ROS1 depth smoke passed`，预处理结果 shape 为 `[1, 1, 30, 45]`；
+- smoke test 输出 `ROS1 depth smoke passed`，预处理结果 shape 为 `[1, 1, 20, 45]`；
 - depth viewer 中图像连续更新，不冻结、不长期全零；
 - controller 启动日志显示正确的 input/output shape、action order 和 ROS depth source；
 - 日志中没有 missing/stale depth、NaN/Inf、ONNX interface mismatch 或进程提前退出；
@@ -199,9 +199,10 @@ controller 连接真机后不会自动开始行走。确认吊装和校零状态
 
 ## 5. Policy Contract
 
-当前 contract 对应：
+depth policy 固定部署到：
 [policy.onnx](rl-deploy-with-python/controllers/model/WF_TRON1B/policy/mjlab_repts_gru_lin_depth/policy.onnx)。
-controller 会在启动时校验名称、shape 和 metadata；不兼容的 ONNX 会直接被拒绝。
+部署前必须用最新的 `20×45` depth policy 覆盖该文件；controller 会在启动时校验名称、
+shape 和 metadata，不兼容的 ONNX 会直接被拒绝。
 
 ### 5.1 ONNX 输入输出
 
@@ -209,7 +210,7 @@ controller 会在启动时校验名称、shape 和 metadata；不兼容的 ONNX 
 | --- | --- | --- | --- |
 | Input | `proprio_history` | `[1, 5, 28]` | 5 帧本体感知历史，oldest-to-newest |
 | Input | `actor_command` | `[1, 3]` | 机体速度指令 |
-| Input | `depth` | `[1, 1, 30, 45]` | float32 米制 depth |
+| Input | `depth` | `[1, 1, 20, 45]` | float32 米制 depth |
 | Input | `hidden_state_in` | `[1, 128]` | GRU 上一时刻状态 |
 | Output | `actions` | `[1, 8]` | 6 个腿关节位置 action + 2 个轮速 action |
 | Output | `predicted_lin_vel` | `[1, 3]` | 预测机体线速度 |
@@ -225,14 +226,14 @@ controller 会在启动时校验名称、shape 和 metadata；不兼容的 ONNX 
 ROS sensor_msgs/Image
     → 16UC1/mono16 × 0.001 转为 meters（32FC1 保持 meters）
     → 完整 FOV nearest-neighbor resize 到 30×53
-    → 左裁 8 列，得到 30×45
+    → 删除底部 10 行和左侧 8 列，得到 20×45
     → finite 且 >= 0.15 m 的值有效，其余映射为 2.5 m
     → clamp [0.15, 2.5] m（不归一化）
-    → float32 [1, 1, 30, 45]
+    → float32 [1, 1, 20, 45]
     → ONNX 直接消费外部预处理结果
 ```
 
-必须传入完整 FOV raw depth。不要在相机端预先裁成 `30×45`，否则会造成重复裁剪。
+必须传入完整 FOV raw depth。不要在相机端预先裁成 `20×45`，否则会造成重复裁剪。
 ROS source 使用接收时的 monotonic clock 判断帧龄，超过 `0.5 s` 的旧帧会被拒绝；
 30 Hz 的最新 depth 可由多个 50 Hz policy step 复用。NPY live fallback 同样拒绝长期未更新的文件。
 

@@ -37,8 +37,9 @@ D435_RAW_DEPTH_WIDTH = 848
 DEPTH_RESIZE_HEIGHT = 30
 DEPTH_RESIZE_WIDTH = 53
 DEPTH_LEFT_CROP_PX = 8
-DEPTH_HEIGHT = 30
-DEPTH_WIDTH = 45
+DEPTH_BOTTOM_CROP_PX = 10
+DEPTH_HEIGHT = DEPTH_RESIZE_HEIGHT - DEPTH_BOTTOM_CROP_PX
+DEPTH_WIDTH = DEPTH_RESIZE_WIDTH - DEPTH_LEFT_CROP_PX
 DEPTH_SHAPE = (DEPTH_CHANNELS, DEPTH_HEIGHT, DEPTH_WIDTH)
 DEPTH_INPUT_SHAPE = (1, *DEPTH_SHAPE)
 DEPTH_MIN_DISTANCE_M = 0.15
@@ -200,9 +201,13 @@ def preprocess_depth_image(
         depth = depth[..., 0]
     if depth.ndim != 2:
         raise ValueError(f"depth image must have shape [H, W] or [H, W, 1], got {depth.shape}")
-    if depth.shape == (DEPTH_HEIGHT, DEPTH_WIDTH):
+    if depth.shape in (
+        (DEPTH_HEIGHT, DEPTH_WIDTH),
+        (DEPTH_RESIZE_HEIGHT, DEPTH_WIDTH),
+    ):
         raise ValueError(
-            "depth image already has the policy target shape; supply full-FOV raw depth"
+            "depth image already has a current or legacy policy target shape; "
+            "supply full-FOV raw depth"
         )
 
     if depth_scale is None:
@@ -214,7 +219,7 @@ def preprocess_depth_image(
 
     depth = depth.astype(np.float32) * np.float32(depth_scale)
     depth = _resize_nearest(depth, DEPTH_RESIZE_HEIGHT, DEPTH_RESIZE_WIDTH)
-    depth = depth[:, DEPTH_LEFT_CROP_PX:DEPTH_RESIZE_WIDTH]
+    depth = depth[:DEPTH_HEIGHT, DEPTH_LEFT_CROP_PX:DEPTH_RESIZE_WIDTH]
     valid = np.isfinite(depth) & (depth >= np.float32(DEPTH_MIN_DISTANCE_M))
     depth = np.where(valid, depth, np.float32(DEPTH_MAX_DISTANCE_M))
     depth = np.clip(
@@ -866,6 +871,7 @@ __all__ = [
     "DEFAULT_OBS_NOISE_RANGES",
     "D435_RAW_DEPTH_HEIGHT",
     "D435_RAW_DEPTH_WIDTH",
+    "DEPTH_BOTTOM_CROP_PX",
     "DEPTH_INPUT_SHAPE",
     "DEPTH_LEFT_CROP_PX",
     "DEPTH_MAX_DISTANCE_M",

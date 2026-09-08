@@ -104,13 +104,13 @@ python3 rl-deploy-with-python/main.py 10.192.1.2
 2. ROS callback 将 `sensor_msgs/Image` 转为 numpy depth。
 3. `16UC1`/`mono16` 从毫米转米，`32FC1` 保持米单位。
 4. 完整 D435 raw frame `480x848` 先以最近邻 resize 到训练相机尺寸 `30x53`。
-5. 左裁 8 列，得到 `30x45`。
+5. 删除底部 10 行和左侧 8 列，得到 `20x45`。
 6. 仅 finite 且大于等于 `0.15 m` 的值有效；其余值映射为 `2.5 m`。
 7. 部署端将结果裁剪到 `[0.15, 2.5] m`，不归一化，并形成 ONNX 输入
-   `[1, 1, 30, 45]`；ONNX 直接消费该输入。
+   `[1, 1, 20, 45]`；ONNX 直接消费该输入。
 8. `WheelfootController.compute_actions()` 在 policy loop 中读取最新帧并输入 ONNX。
 
-sim2sim 的 `d435` producer 默认发布完整 `480x848` 米深度、频率 `30 Hz`。真机和 sim2sim 都必须将完整 FOV raw frame 交给 source；不要预先传入已经裁成 `30x45` 的图像，避免重复左裁。部署前必须导出输入 depth 为 `[1, 1, 30, 45]` 的新 ONNX；旧 `[1, 1, 28, 48]` ONNX 会被接口校验拒绝。
+sim2sim 的 `d435` producer 默认发布完整 `480x848` 米深度、频率 `30 Hz`。真机和 sim2sim 都必须将完整 FOV raw frame 交给 source；不要预先传入已经裁成 `20x45` 的图像，避免重复裁剪。部署前必须导出输入 depth 为 `[1, 1, 20, 45]` 的新 ONNX；旧 `[1, 1, 30, 45]` 和 `[1, 1, 28, 48]` ONNX 会被接口校验拒绝。
 
 如果 ROS topic 间隔超过 YAML 中的 `max_age_s`（默认 `0.5` 秒），
 controller 会抛出 stale frame `TimeoutError`，这是为了避免策略使用过期

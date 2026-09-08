@@ -125,8 +125,8 @@ Sim-to-Sim 默认 topic 为 `/camera/depth/image_rect_raw`；真机默认 topic 
 ### depth shape 或二次裁剪错误
 
 controller 需要完整 D435 raw frame `480×848`。部署端会先以最近邻 resize 到
-`30×53`，再左裁 8 列得到 `30×45`；不要发布已裁剪的 policy-sized depth。接口必须
-最终得到 float32 `[1,1,30,45]`。
+`30×53`，再删除底部 10 行和左侧 8 列得到 `20×45`；不要发布已裁剪的
+policy-sized depth。接口必须最终得到 float32 `[1,1,20,45]`。
 
 ### depth 全零、全远或尺度异常
 

@@ -25,6 +25,8 @@ sys.path.insert(0, str(DEPLOY_ROOT))
 from mjlab_repts_lin_depth import (  # noqa: E402
     D435_RAW_DEPTH_HEIGHT,
     D435_RAW_DEPTH_WIDTH,
+    DEPTH_BOTTOM_CROP_PX,
+    DEPTH_HEIGHT,
     DEPTH_INPUT_SHAPE,
     DEPTH_GAUSSIAN_BLUR_KERNEL_SIZE,
     DEPTH_GAUSSIAN_BLUR_SIGMA,
@@ -320,7 +322,9 @@ class FakeMeta:
         "action_scale": "0.5,0.5,0.5,0.5,0.5,0.5,10.0,10.0",
         "depth_input_dtype": "float32",
         "depth_input_unit": "m",
-        "depth_input_shape": "1.000,1.000,30.000,45.000",
+        "depth_input_shape": ",".join(
+            f"{value:.3f}" for value in DEPTH_INPUT_SHAPE
+        ),
         "depth_input_range": "0.15,2.5",
         "depth_invalid_value": "2.5",
         "depth_min_m": "0.15",
@@ -337,7 +341,7 @@ class FakePolicySession:
         return [
             FakeIo("proprio_history", [1, 5, 28]),
             FakeIo("actor_command", [1, 3]),
-            FakeIo("depth", [1, 1, 30, 45]),
+            FakeIo("depth", list(DEPTH_INPUT_SHAPE)),
             FakeIo("hidden_state_in", list(GRU_HIDDEN_STATE_SHAPE)),
         ]
 
@@ -593,25 +597,30 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
             .astype(np.int64)
         )
         resized = raw[row_idx[:, None], col_idx[None, :]]
-        expected = resized[:, DEPTH_LEFT_CROP_PX:DEPTH_RESIZE_WIDTH]
+        expected = resized[:DEPTH_HEIGHT, DEPTH_LEFT_CROP_PX:DEPTH_RESIZE_WIDTH]
         legacy_crop = int(round(raw.shape[1] * (8 / 53)))
         legacy = raw[:, legacy_crop:]
         legacy_col_idx = (
             np.linspace(0, legacy.shape[1] - 1, 45).round().astype(np.int64)
         )
-        legacy = legacy[row_idx[:, None], legacy_col_idx[None, :]]
+        legacy = legacy[row_idx[:, None], legacy_col_idx[None, :]][:DEPTH_HEIGHT]
         self.assertEqual(depth.shape, DEPTH_INPUT_SHAPE)
         np.testing.assert_allclose(depth[0, 0], expected)
         self.assertFalse(np.allclose(depth[0, 0], legacy))
 
     def test_depth_preprocess_crops_training_shape_to_policy_shape(self):
-        raw = np.tile(np.linspace(0.15, 2.5, 53, dtype=np.float32), (30, 1))
+        raw = np.tile(
+            np.linspace(0.15, 2.0, DEPTH_RESIZE_WIDTH, dtype=np.float32),
+            (DEPTH_RESIZE_HEIGHT, 1),
+        )
+        raw += np.arange(DEPTH_RESIZE_HEIGHT, dtype=np.float32)[:, None] * 0.01
 
         depth = preprocess_depth_image(raw, apply_gaussian_blur=False)
 
         self.assertEqual(depth.shape, DEPTH_INPUT_SHAPE)
-        expected = raw[:, 8:]
+        expected = raw[:DEPTH_HEIGHT, DEPTH_LEFT_CROP_PX:]
         np.testing.assert_allclose(depth[0, 0], expected)
+        self.assertEqual(DEPTH_BOTTOM_CROP_PX, 10)
 
     def test_depth_preprocess_rejects_invalid_shape_and_depth_scale(self):
         with self.assertRaisesRegex(ValueError, "depth image must have shape"):
@@ -625,8 +634,12 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
                     )
 
     def test_depth_preprocess_rejects_already_cropped_policy_frame(self):
-        with self.assertRaisesRegex(ValueError, "already has the policy target shape"):
-            preprocess_depth_image(np.ones((30, 45), dtype=np.float32))
+        for height in (DEPTH_HEIGHT, DEPTH_RESIZE_HEIGHT):
+            with self.subTest(height=height):
+                with self.assertRaisesRegex(
+                    ValueError, "already has a current or legacy policy target shape"
+                ):
+                    preprocess_depth_image(np.ones((height, 45), dtype=np.float32))
 
     def test_ros_depth_image_respects_step_padding(self):
         msg = FakeRosImage()
@@ -642,7 +655,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
 
         depth = _ros_image_to_depth_input(msg, apply_gaussian_blur=False)
 
-        self.assertEqual(depth.shape, (1, 1, 30, 45))
+        self.assertEqual(depth.shape, DEPTH_INPUT_SHAPE)
         np.testing.assert_allclose(depth[0, 0, 0, 0], 1.0)
         np.testing.assert_allclose(depth[0, 0, 0, -1], 2.0)
         np.testing.assert_allclose(depth[0, 0, -1, 0], 2.5)
@@ -864,7 +877,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
     def test_validate_depth_policy_interface_accepts_expected_metadata(self):
         validate_depth_policy_interface(
             POLICY_INPUT_NAMES,
-            [[1, 5, 28], [1, 3], [1, 1, 30, 45], [1, 128]],
+            [[1, 5, 28], [1, 3], list(DEPTH_INPUT_SHAPE), [1, 128]],
             POLICY_OUTPUT_NAMES,
             [[1, 8], [1, 3], [1, 128]],
             FakeMeta.custom_metadata_map,
@@ -877,7 +890,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "metadata policy_input_names"):
             validate_depth_policy_interface(
                 POLICY_INPUT_NAMES,
-                [[1, 5, 28], [1, 3], [1, 1, 30, 45], [1, 128]],
+                [[1, 5, 28], [1, 3], list(DEPTH_INPUT_SHAPE), [1, 128]],
                 POLICY_OUTPUT_NAMES,
                 [[1, 8], [1, 3], [1, 128]],
                 metadata,
@@ -898,7 +911,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, key):
                     validate_depth_policy_interface(
                         POLICY_INPUT_NAMES,
-                        [[1, 5, 28], [1, 3], [1, 1, 30, 45], [1, 128]],
+                        [[1, 5, 28], [1, 3], list(DEPTH_INPUT_SHAPE), [1, 128]],
                         POLICY_OUTPUT_NAMES,
                         [[1, 8], [1, 3], [1, 128]],
                         metadata,
@@ -913,11 +926,11 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
                 [[1, 8]],
             )
 
-    def test_validate_depth_policy_interface_rejects_legacy_depth_shape(self):
+    def test_validate_depth_policy_interface_rejects_uncropped_depth_shape(self):
         with self.assertRaisesRegex(ValueError, "input shapes"):
             validate_depth_policy_interface(
                 POLICY_INPUT_NAMES,
-                [[1, 5, 28], [1, 3], [1, 1, 28, 48], [1, 128]],
+                [[1, 5, 28], [1, 3], [1, 1, 30, 45], [1, 128]],
                 POLICY_OUTPUT_NAMES,
                 [[1, 8], [1, 3], [1, 128]],
             )
@@ -926,7 +939,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "output shapes"):
             validate_depth_policy_interface(
                 POLICY_INPUT_NAMES,
-                [[1, 5, 28], [1, 3], [1, 1, 30, 45], [1, 128]],
+                [[1, 5, 28], [1, 3], list(DEPTH_INPUT_SHAPE), [1, 128]],
                 POLICY_OUTPUT_NAMES,
                 [[1, 8], [1, 3], [1, 64]],
                 hidden_state_shape=GRU_HIDDEN_STATE_SHAPE,

@@ -376,7 +376,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         )
         self.assertTrue(all(np.isfinite(output).all() for output in outputs))
 
-    def test_controller_uses_onnx_depth_preprocessing_profile(self):
+    def test_controller_uses_deployment_depth_preprocessing_profile(self):
         wheelfoot_module = _import_wheelfoot_module()
         fake_depth_source = mock.Mock()
 
@@ -407,7 +407,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
                 "ros_type": "ros1",
                 "encoding": None,
                 "depth_scale": None,
-                "preprocess_in_onnx": True,
+                "preprocess_in_onnx": False,
                 "timeout_s": 0.5,
                 "max_age_s": 0.5,
                 "npy_path": None,
@@ -481,7 +481,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
             proprio_obs[12:18],
             (joint_vel[leg_joint_indexes] - default_joint_vel[leg_joint_indexes]) * 0.05,
         )
-        np.testing.assert_allclose(proprio_obs[18:20], joint_vel[[3, 7]] * 0.5)
+        np.testing.assert_allclose(proprio_obs[18:20], joint_vel[[3, 7]] * 0.05)
         np.testing.assert_allclose(proprio_obs[20:28], last_action)
 
     def test_proprio_history_is_oldest_to_newest(self):
@@ -500,7 +500,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         np.testing.assert_allclose(matrix[0, :3], np.full(3, 0, dtype=np.float32))
         np.testing.assert_allclose(matrix[-1, :3], np.full(3, 40, dtype=np.float32))
 
-    def test_depth_preprocess_converts_16uc1_mm_to_meters(self):
+    def test_depth_preprocess_converts_16uc1_mm_and_normalizes(self):
         image = np.array([[0, 1000], [2000, 30000]], dtype=np.uint16)
 
         depth = preprocess_depth_image(
@@ -513,10 +513,10 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         self.assertEqual(depth.shape, (1, 1, 2, 2))
         np.testing.assert_allclose(
             depth[0, 0],
-            np.array([[0.0, 1.0], [2.0, 30.0]], dtype=np.float32),
+            np.array([[0.0, 4.0 / 9.0], [1.0, 1.0]], dtype=np.float32),
         )
 
-    def test_depth_preprocess_sanitizes_invalid_and_preserves_metric_values(self):
+    def test_depth_preprocess_clips_and_normalizes_training_range(self):
         image = np.array(
             [
                 np.nan,
@@ -542,15 +542,16 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         np.testing.assert_allclose(
             depth[0, 0],
             np.array(
-                [[0.0, 0.0, 0.0, 0.0, 0.0, 0.199, 0.2, 1.1, 2.0, 2.001]],
+                [[0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0]],
                 dtype=np.float32,
             ),
             atol=1.0e-7,
         )
         self.assertTrue(np.all(np.isfinite(depth)))
         self.assertTrue(np.all(depth >= 0.0))
+        self.assertTrue(np.all(depth <= 1.0))
 
-    def test_deployment_side_depth_preprocess_keeps_metric_input_semantics(self):
+    def test_deployment_side_depth_preprocess_uses_configured_range(self):
         image = np.array(
             [[np.nan, np.inf, -np.inf, -1.0, 0.0, 0.1, 1.0, 11.0]],
             dtype=np.float32,
@@ -567,7 +568,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
 
         np.testing.assert_allclose(
             depth[0, 0],
-            np.array([[0.0, 10.0, 0.0, 0.0, 0.0, 0.1, 1.0, 10.0]]),
+            np.array([[0.0, 1.0, 0.0, 0.0, 0.0, 0.01, 0.1, 1.0]]),
         )
 
     def test_depth_preprocess_validates_depth_range(self):
@@ -600,7 +601,8 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         cropped = raw[:, D435_LEFT_CROP_PX:]
         row_idx = np.linspace(0, cropped.shape[0] - 1, 30).round().astype(np.int64)
         col_idx = np.linspace(0, cropped.shape[1] - 1, 45).round().astype(np.int64)
-        expected = cropped[row_idx[:, None], col_idx[None, :]]
+        expected = np.clip(cropped[row_idx[:, None], col_idx[None, :]], 0.2, 2.0)
+        expected = (expected - 0.2) / 1.8
         self.assertEqual(depth.shape, (1, 1, 30, 45))
         np.testing.assert_allclose(depth[0, 0], expected)
 
@@ -611,7 +613,8 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         depth = preprocess_depth_image(raw)
 
         self.assertEqual(depth.shape, (1, 1, 30, 45))
-        expected = raw[:, 8:]
+        expected = np.clip(raw[:, 8:], 0.2, 2.0)
+        expected = (expected - 0.2) / 1.8
         np.testing.assert_allclose(depth[0, 0], expected)
         self.assertEqual(D435_LEFT_CROP_FRACTION, 8 / 53)
 
@@ -652,10 +655,10 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         )
 
         self.assertEqual(depth.shape, (1, 1, 30, 45))
-        np.testing.assert_allclose(depth[0, 0, 0, 0], 1.0)
-        np.testing.assert_allclose(depth[0, 0, 0, -1], 2.0)
-        np.testing.assert_allclose(depth[0, 0, -1, 0], 3.0)
-        np.testing.assert_allclose(depth[0, 0, -1, -1], 4.0)
+        np.testing.assert_allclose(depth[0, 0, 0, 0], 0.1)
+        np.testing.assert_allclose(depth[0, 0, 0, -1], 0.2)
+        np.testing.assert_allclose(depth[0, 0, -1, 0], 0.3)
+        np.testing.assert_allclose(depth[0, 0, -1, -1], 0.4)
 
     def test_ros_image_to_depth_meters_keeps_raw_shape(self):
         msg = FakeRosImage()
@@ -691,7 +694,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         self.assertEqual(depth_m.shape, (1, 2))
         np.testing.assert_allclose(depth_m, np.array([[1.25, 2.5]], dtype=np.float32))
 
-    def test_ros_depth_input_encodes_invalid_pixels_as_zero_meters(self):
+    def test_ros_depth_input_clips_and_normalizes_training_range(self):
         msg = FakeRosImage()
         msg.height = 1
         msg.width = 8
@@ -708,9 +711,10 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         self.assertEqual(depth.shape, DEPTH_INPUT_SHAPE)
         self.assertTrue(np.all(np.isfinite(depth)))
         self.assertTrue(np.all(depth >= 0.0))
+        self.assertTrue(np.all(depth <= 1.0))
         np.testing.assert_allclose(
             np.unique(depth),
-            np.array([0.0, 0.1, 0.2, 1.1, 2.0, 2.1], dtype=np.float32),
+            np.array([0.0, 0.5, 1.0], dtype=np.float32),
             atol=1.0e-7,
         )
 
@@ -771,7 +775,7 @@ class MjlabRepTsLinDepthAlignmentTest(unittest.TestCase):
         msg.data = np.array([1500], dtype=np.uint16).tobytes()
         subscriber_callbacks[0](msg)
 
-        np.testing.assert_allclose(source.frame()[0, 0, 0, 0], 1.5)
+        np.testing.assert_allclose(source.frame()[0, 0, 0, 0], 13.0 / 18.0)
 
     def test_ros1_depth_publisher_uses_image_wire_format(self):
         state = {"published": []}

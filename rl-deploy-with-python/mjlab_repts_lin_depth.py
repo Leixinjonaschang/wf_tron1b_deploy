@@ -112,7 +112,7 @@ def build_proprio_terms(
         "projected_gravity": projected_gravity,
         "joint_pos": joint_pos_rel,
         "joint_vel": joint_vel_rel * np.float32(0.05),
-        "wheel_vel": wheel_vel * np.float32(0.5),
+        "wheel_vel": wheel_vel * np.float32(0.05),
         "actions": _vector("last_action", last_action, 8),
     }
 
@@ -197,10 +197,10 @@ def preprocess_depth_image(
     depth_scale: float | None = None,
     min_depth: float = DEPTH_MIN_DISTANCE_M,
     max_depth: float = DEPTH_MAX_DISTANCE_M,
-    preprocess_in_onnx: bool = True,
+    preprocess_in_onnx: bool = False,
     left_crop_fraction: float = D435_LEFT_CROP_FRACTION,
 ) -> np.ndarray:
-    """Convert full-FOV raw depth to finite metric ONNX input."""
+    """Convert full-FOV raw depth to the policy's finite depth input."""
 
     if not isinstance(preprocess_in_onnx, (bool, np.bool_)):
         raise ValueError(
@@ -239,6 +239,7 @@ def preprocess_depth_image(
             neginf=np.float32(0.0),
         )
         depth = np.clip(depth, np.float32(min_depth), np.float32(max_depth))
+        depth = (depth - np.float32(min_depth)) / np.float32(max_depth - min_depth)
     left_crop = int(round(depth.shape[1] * left_crop_fraction))
     if left_crop >= depth.shape[1]:
         raise ValueError("left_crop_fraction leaves no depth columns")
@@ -260,7 +261,7 @@ class DepthSourceConfig:
     depth_scale: float | None = None
     min_depth: float = DEPTH_MIN_DISTANCE_M
     max_depth: float = DEPTH_MAX_DISTANCE_M
-    preprocess_in_onnx: bool = True
+    preprocess_in_onnx: bool = False
     timeout_s: float = 0.2
     max_age_s: float = 0.5
     npy_path: str | None = None
@@ -489,7 +490,7 @@ def _ros_image_to_depth_input(
     depth_scale: float | None = None,
     min_depth: float = DEPTH_MIN_DISTANCE_M,
     max_depth: float = DEPTH_MAX_DISTANCE_M,
-    preprocess_in_onnx: bool = True,
+    preprocess_in_onnx: bool = False,
     left_crop_fraction: float = D435_LEFT_CROP_FRACTION,
 ) -> np.ndarray:
     encoding = encoding_override or msg.encoding

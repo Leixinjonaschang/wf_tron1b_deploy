@@ -73,6 +73,36 @@ RL_TYPE=mjlab_repts_gru_lin_depth \
 scripts/start_sim2sim.sh
 ```
 
+需要录制模拟器状态时，在启动命令前传入日志路径即可。日志为 CSV，默认约 10 Hz；可以用
+`MJLAB_STATE_LOG_HZ` 调整采样频率。每行包含时间戳、MuJoCo 的 `qpos/qvel/ctrl` 和 IMU 数据：
+
+```bash
+MJLAB_STATE_LOG_PATH=logs/sim2sim/state_run01.csv \
+MJLAB_STATE_LOG_HZ=10 \
+ROBOT_TYPE=WF_TRON1B RL_TYPE=mjlab_repts_lin \
+scripts/start_sim2sim.sh
+```
+
+不设置 `MJLAB_STATE_LOG_PATH` 时不会创建状态日志。
+
+录制完成后，可以把一段时间内的多个机器人姿态叠加到同一张图中。渲染脚本默认使用与录制
+相同的 `scene_rough_ground.xml`，因此粗糙地形也会出现在图片里；输出旁边还会生成一个 JSON，
+记录实际使用的时间点、姿态和相机参数：
+
+```bash
+uv run python scripts/render_state_trajectory.py \
+  --csv logs/sim2sim/state_run01.csv \
+  --start 27 --end 35 --count 7 \
+  --gl egl \
+  --output logs/sim2sim/rough_ground_trajectory.png
+```
+
+`--count` 控制叠加的姿态数量，`--ghost-alpha` 控制历史姿态透明度，`--azimuth`、
+`--elevation`、`--distance` 和 `--lookat X Y Z` 控制视角。脚本保留 CSV 中的绝对位置，
+所以机器人会沿真实轨迹分布，而不是被横向平移排列。地面默认使用中性灰色，并保留低对比度
+的米制网格线；可以用 `--floor-color R G B`、`--floor-grid-color R G B`、
+`--floor-grid-size` 和 `--floor-grid-width` 微调。
+
 启动器会在需要时创建本地 ROS master，然后启动 simulator、controller、可选 depth
 viewer 和虚拟遥控器。按虚拟遥控器终端中的 `Ctrl-C` 会停止全部子进程。renderer 与
 NVIDIA PRIME 排查见 [Troubleshooting](doc/troubleshooting.md)。

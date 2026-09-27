@@ -2,10 +2,13 @@
 #
 # © [2024] LimX Dynamics Technology Co., Ltd. All rights reserved.
 
+import csv
 import os
 import sys
 import time
+from collections import deque
 from pathlib import Path
+import numpy as np
 import mujoco
 import mujoco.viewer as viewer
 from functools import partial
@@ -115,8 +118,61 @@ class SimulatorMujoco:
         self.depth_camera_name = os.getenv("MJLAB_DEPTH_CAMERA", "d435")
         self.depth_capture_frequency = float(os.getenv("MJLAB_DEPTH_CAPTURE_HZ", "30.0"))
 
+        # Optional viewer-only wheel-center trajectory.  It is deliberately
+        # disabled by default because every extra viewer geom adds rendering
+        # work during sim2sim.
+        self.wheel_trail_enabled = os.getenv("MJLAB_WHEEL_TRAIL", "0").lower() in (
+            "1", "true", "yes", "on"
+        )
+        self.wheel_trail_seconds = max(
+            0.1, float(os.getenv("MJLAB_WHEEL_TRAIL_SECONDS", "10.0"))
+        )
+        self.wheel_trail_frequency = max(
+            1.0, float(os.getenv("MJLAB_WHEEL_TRAIL_HZ", "30.0"))
+        )
+        self.wheel_trail_radius = max(
+            0.001, float(os.getenv("MJLAB_WHEEL_TRAIL_RADIUS", "0.015"))
+        )
+        self.wheel_trail_body_names = tuple(
+            name.strip()
+            for name in os.getenv(
+                "MJLAB_WHEEL_TRAIL_BODIES", "wheel_L_Link,wheel_R_Link"
+            ).split(",")
+            if name.strip()
+        )
+        self.wheel_trail_body_ids = ()
+        self.wheel_trail_history = {}
+        self.wheel_trail_period_steps = 1
+
         self.dt = self.mujoco_model.opt.timestep  # Get simulation timestep
         self.fps = 1 / self.dt  # Calculate frames per second (FPS)
+        self.state_log_path = os.getenv("MJLAB_STATE_LOG_PATH")
+        self.state_log_hz = max(
+            1.0e-3, float(os.getenv("MJLAB_STATE_LOG_HZ", "10.0"))
+        )
+        self.state_log_file = None
+        self.state_log_writer = None
+        self.state_log_period_steps = max(
+            1, round(self.fps / self.state_log_hz)
+        )
+        if self.state_log_path:
+            state_path = Path(self.state_log_path)
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.state_log_file = state_path.open("w", newline="")
+            state_fields = ["wall_time_ns", "sim_time"]
+            state_fields.extend(f"qpos_{i}" for i in range(self.mujoco_model.nq))
+            state_fields.extend(f"qvel_{i}" for i in range(self.mujoco_model.nv))
+            state_fields.extend(f"ctrl_{i}" for i in range(self.mujoco_model.nu))
+            state_fields.extend(f"imu_quat_{i}" for i in range(4))
+            state_fields.extend(f"imu_gyro_{i}" for i in range(3))
+            state_fields.extend(f"imu_acc_{i}" for i in range(3))
+            self.state_log_writer = csv.writer(self.state_log_file)
+            self.state_log_writer.writerow(state_fields)
+            self.state_log_file.flush()
+            print(
+                f"*** State logging enabled: path={state_path}, "
+                f"hz={self.state_log_hz:g} ***"
+            )
         self.depth_capture_period_steps = max(
             1,
             round(self.fps / max(self.depth_capture_frequency, 1.0e-6)),
@@ -129,15 +185,53 @@ class SimulatorMujoco:
                     self.depth_ros_topic,
                     frame_id=self.depth_ros_frame_id,
                 )
-        # Launch the MuJoCo viewer with the XML's fixed third-person camera.
+        # Launch the MuJoCo viewer.  In tracking mode the camera target follows
+        # the selected body while its orbit, pan, and zoom remain interactive.
         self.viewer = viewer.launch_passive(self.mujoco_model, self.mujoco_data, key_callback=self.key_callback, show_left_ui=True, show_right_ui=True)
-        track_camera_id = mujoco.mj_name2id(
-            self.mujoco_model, mujoco.mjtObj.mjOBJ_CAMERA, "track"
-        )
-        if track_camera_id < 0:
-            raise RuntimeError("MuJoCo follow camera 'track' not found in XML")
-        self.viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
-        self.viewer.cam.fixedcamid = track_camera_id
+        camera_mode = os.getenv("MJLAB_CAMERA_MODE", "free").strip().lower()
+        if camera_mode == "tracking":
+            target_name = os.getenv("MJLAB_CAMERA_TARGET", "base_Link")
+            body_id = mujoco.mj_name2id(
+                self.mujoco_model, mujoco.mjtObj.mjOBJ_BODY, target_name
+            )
+            if body_id < 0:
+                raise ValueError(
+                    f"MJLAB_CAMERA_TARGET body not found: {target_name!r}"
+                )
+            self.viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+            self.viewer.cam.trackbodyid = body_id
+        elif camera_mode == "free":
+            self.viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+        else:
+            raise ValueError("MJLAB_CAMERA_MODE must be 'free' or 'tracking'")
+
+        if self.wheel_trail_enabled:
+            self.wheel_trail_body_ids = tuple(
+                mujoco.mj_name2id(self.mujoco_model, mujoco.mjtObj.mjOBJ_BODY, name)
+                for name in self.wheel_trail_body_names
+            )
+            missing = [
+                name
+                for name, body_id in zip(
+                    self.wheel_trail_body_names, self.wheel_trail_body_ids
+                )
+                if body_id < 0
+            ]
+            if missing:
+                raise ValueError(
+                    "MJLAB_WHEEL_TRAIL_BODIES not found in XML: "
+                    + ", ".join(missing)
+                )
+            self.wheel_trail_period_steps = max(
+                1, round(self.fps / self.wheel_trail_frequency)
+            )
+            trail_size = max(
+                1, round(self.wheel_trail_seconds * self.wheel_trail_frequency)
+            )
+            self.wheel_trail_history = {
+                body_id: deque(maxlen=trail_size)
+                for body_id in self.wheel_trail_body_ids
+            }
         # Initialize robot command data with default values
         self.robot_cmd = datatypes.RobotCmd()
         self.robot_cmd.mode = [0. for x in range(0, self.joint_num)]
@@ -218,6 +312,19 @@ class SimulatorMujoco:
         if self.depth_ros_pub is not None:
             self.depth_ros_pub.publish(depth)
 
+    def _record_state(self):
+        if self.state_log_writer is None:
+            return
+        row = [time.time_ns(), self.mujoco_data.time]
+        row.extend(np.asarray(self.mujoco_data.qpos, dtype=float))
+        row.extend(np.asarray(self.mujoco_data.qvel, dtype=float))
+        row.extend(np.asarray(self.mujoco_data.ctrl, dtype=float))
+        row.extend(np.asarray(self.imu_data.quat, dtype=float))
+        row.extend(np.asarray(self.imu_data.gyro, dtype=float))
+        row.extend(np.asarray(self.imu_data.acc, dtype=float))
+        self.state_log_writer.writerow(row)
+        self.state_log_file.flush()
+
     # Callback function for receiving robot command data
     def robotCmdCallback(self, robot_cmd: datatypes.RobotCmd):
         self.robot_cmd = robot_cmd
@@ -225,6 +332,36 @@ class SimulatorMujoco:
     # Callback for keypress events in the MuJoCo viewer (currently does nothing)
     def key_callback(self, keycode):
         pass
+
+    def _update_wheel_trail(self):
+        if not self.wheel_trail_enabled:
+            return
+        for body_id, history in self.wheel_trail_history.items():
+            history.append(np.array(self.mujoco_data.xpos[body_id], dtype=float))
+
+        user_scene = self.viewer.user_scn
+        user_scene.ngeom = 0
+        colors = (
+            np.array([0.95, 0.25, 0.10, 0.9], dtype=np.float32),
+            np.array([0.10, 0.55, 1.00, 0.9], dtype=np.float32),
+        )
+        for wheel_index, body_id in enumerate(self.wheel_trail_body_ids):
+            color = colors[wheel_index % len(colors)]
+            for point in self.wheel_trail_history[body_id]:
+                if user_scene.ngeom >= user_scene.maxgeom:
+                    return
+                geom = user_scene.geoms[user_scene.ngeom]
+                mujoco.mjv_initGeom(
+                    geom,
+                    mujoco.mjtGeom.mjGEOM_SPHERE,
+                    np.array(
+                        [self.wheel_trail_radius, 0.0, 0.0], dtype=np.float64
+                    ),
+                    point,
+                    np.eye(3, dtype=np.float64).reshape(-1),
+                    color,
+                )
+                user_scene.ngeom += 1
 
     def run(self):
         frame_count = 0
@@ -268,8 +405,17 @@ class SimulatorMujoco:
             self.imu_data.stamp = time.time_ns()
             self.robot.publishImuDataForSim(self.imu_data)
 
+            if frame_count % self.state_log_period_steps == 0:
+                self._record_state()
+
             if frame_count % self.depth_capture_period_steps == 0:
                 self._export_depth_frame()
+
+            if (
+                self.wheel_trail_enabled
+                and frame_count % self.wheel_trail_period_steps == 0
+            ):
+                self._update_wheel_trail()
 
             # Sync the viewer every 20 frames for smoother visualization
             if frame_count % 20 == 0:
@@ -277,6 +423,9 @@ class SimulatorMujoco:
 
             frame_count += 1
             self.rate.sleep()  # Maintain the simulation loop at the correct rate
+
+        if self.state_log_file is not None:
+            self.state_log_file.close()
 
 if __name__ == '__main__': 
     robot_type = os.getenv("ROBOT_TYPE")

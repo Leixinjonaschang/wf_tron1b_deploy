@@ -260,8 +260,8 @@ def command_from_joystick_axes(axes) -> np.ndarray:
 
     clipped = np.clip(axes[:3], -1.0, 1.0)
     forward_command = clipped[1]
-    if forward_command > 0.0:
-        forward_command *= np.float32(2.0)
+    # if forward_command > 0.0:
+    #     forward_command *= np.float32(2.0)
     return np.array(
         [forward_command, clipped[0], clipped[2] * np.float32(np.pi / 2.0)],
         dtype=np.float32,

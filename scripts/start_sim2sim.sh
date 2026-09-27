@@ -8,7 +8,7 @@ CTRL_DIR="${REPO_DIR}/rl-deploy-with-python"
 LOG_DIR="${REPO_DIR}/logs/sim2sim"
 
 ROBOT_TYPE="${ROBOT_TYPE:-WF_TRON1B}"
-RL_TYPE="${RL_TYPE:-mjlab_repts_lin}"
+RL_TYPE="${RL_TYPE:-mjlab_repts_gru_lin_depth}"
 MJLAB_SCENE="${MJLAB_SCENE:-robot.xml}"
 ROBOT_IP="${ROBOT_IP:-127.0.0.1}"
 SIM_START_DELAY="${SIM_START_DELAY:-2}"

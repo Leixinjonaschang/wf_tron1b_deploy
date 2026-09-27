@@ -156,6 +156,81 @@ CSV；JSON 的 `wheel_trails` / `base_trail` 保留原始 `positions_world_m`、
 viewer 和虚拟遥控器。按虚拟遥控器终端中的 `Ctrl-C` 会停止全部子进程。renderer 与
 NVIDIA PRIME 排查见 [Troubleshooting](doc/troubleshooting.md)。
 
+#### 单时刻机器人、深度相机 FOV 与深度图
+
+使用独立脚本从同一份 `data/state_run01.csv` 中选取一个姿态，同时保存机器人与地形的
+外部视角图、相机深度图及米单位的原始深度数组：
+
+```bash
+.venv/bin/python scripts/render_depth_camera.py --time 63.5
+```
+
+`--time` 单位为仿真秒，默认 `63.5`，选择时间最近的原始 CSV 行，不插值；超出录制范围
+会报错。默认 `--camera d435`、`--scene scene_rough_ground.xml`（完整路径由脚本设置）、
+EGL 后端。更换录制数据或地形时，通过 `--csv` / `--scene` 指定对应文件。
+
+默认输出：
+
+- `logs/sim2sim/robot_depth_fov.png`：3840×2160 场景图，绿色地形、白色无网格地板、
+  哑光机器人、阴影、不透明灰色 FOV 线框、框内深度图和黄色 terrain scan dots。
+- `logs/sim2sim/robot_depth_fov_depth.png`：848×480 完整相机深度灰度图，近黑远白。
+- `logs/sim2sim/robot_depth_fov_depth.npy`：未经预览裁剪的 float32 深度，单位米。
+- `logs/sim2sim/robot_depth_fov.json`：实际时间、CSV 行号、qpos、相机世界位姿、FOV、
+  线框边界、scan dots 的真实命中坐标与出图参数。
+
+FOV 来自 XML 相机的真实安装位姿和垂直视场角，随该帧机器人姿态变化。
+`d435` 默认垂直视场角 58°，848×480 下水平视场角约 88.8°。
+相机沿局部 −Z 看向前方，+X 向右、+Y 向上，水平视场角取决于输出宽高比；
+参见 [MuJoCo camera 文档](https://mujoco.readthedocs.io/en/stable/XMLreference.html#body-camera)。
+这里展示完整相机视野，未进行策略输入的左侧 128 列裁剪或 30×45 缩放。
+
+线框默认是四条角射线加矩形底框，不投射或贴合地面。矩形成像平面垂直于相机光轴，
+其中心位于相机光心沿前向光轴 **0.5 米**处（以相机为距离基准，而非 base 质心）。
+默认按真实深度处理遮挡，机器人或地形后方的线框不可见；
+`--fov-overlay` 可显式切换为不考虑场景遮挡的示意叠加显示。
+保留 `--fov-clip` 可显式恢复旧版沿地表截断线框的模式。
+
+默认把同一帧的深度灰度图贴满矩形成像平面，与独立保存的 `_depth.png` 共用图像数据。
+平面随相机位姿变化，大小与 FOV 底框一致，遵循场景透视和遮挡；从相机侧观察时，
+图像方向与独立深度图一致，从背面观察时呈正常镜像。默认不透明，可能遮住其后方的
+部分机器人、地形和 scan dots。使用 `--no-depth-plane` 可只显示线框，
+`--depth-plane-alpha 0.6` 可将图像平面设为半透明，不影响灰色线框的不透明度。
+贴图平面只加入外部渲染场景，不参与物理仿真、不投射阴影，也不进入深度或扫描点计算。
+
+黄色 scan dots 单独表示相机可见的地表范围：在完整图像平面上均匀采样 `32×20` 条射线，
+只在射线首次命中静态地形或地板时添加标记。射线先碰到机器人、没有命中，或超过
+扫描深度上限时不添加点，因此机器人或障碍物挡住的后方地面不会被标记。
+点跟随地形真实高度，显示时沿表面法向略微偏移，避免被表面遮住；JSON 保留未偏移的
+命中位置。扫描默认最大光轴深度为 2 米，独立于 0.5 米的示意成像平面。
+
+常用参数：
+
+- `--fov-length 0.5`：成像平面距相机光心沿光轴的距离（米），只控制线框长度。
+- `--fov-alpha 1.0`、`--fov-radius 0.0075`、`--fov-color 0.5 0.5 0.5`：线框不透明度、
+  线条半径（米）与颜色。
+- `--depth-plane` / `--no-depth-plane`：开启/关闭成像平面上的深度图，默认开启；
+  `--depth-plane-alpha 1.0` 调整其不透明度。
+- `--robot-alpha 1.0`：场景图中机器人的不透明度，`1` 不透明、`0.3` 半透明、`0` 隐藏。
+  只改变外部出图效果，深度图和 scan dots 仍按原始机器人计算；与 `--robot-matte` 独立。
+- `--scan-columns 32 --scan-rows 20`：scan dots 的图像采样密度；
+  `--scan-radius 0.008 --scan-alpha 0.85 --scan-color 1 0.85 0.2` 调整大小、透明度与颜色。
+- `--scan-max-depth 2.0`：扫描最大光轴深度（米）；`--no-scan-dots` 隐藏扫描点。
+- `--azimuth 240 --elevation -25`：外部视角；默认自动调整目标和距离来容纳机器人与 FOV，
+  可用 `--lookat X Y Z --distance D` 手动覆盖。
+- `--width 3840 --height 2160`：场景图分辨率；`--depth-width 848 --depth-height 480`
+  单独控制深度图分辨率，改变宽高比也会改变水平 FOV。
+- `--depth-min 0.2 --depth-max 2.0`：独立深度图与平面贴图共用的灰度映射范围，
+  范围外饱和为黑/白，`.npy` 保留原值。
+- `--light-scale 0.7`：减弱外部场景主光和头灯；`--top-light --top-light-intensity 0.2`
+  增加顶光；`--no-shadows` 关闭阴影。
+- `--output 路径.png`：场景图路径，默认由此派生 `_depth.png`、`_depth.npy`、`.json`；
+  `--depth-output 路径.png` 可单独指定深度图路径。
+
+深度图使用与模拟器相同的 camera 和 geom group 0/1，在添加线框、图像平面、scan dots 和外部场景样式前渲染，
+这些标记不会出现在深度结果中。数组数值为沿相机光轴的深度，不是到相机原点的欧氏距离；
+无物体的背景取 MuJoCo 的远裁剪深度。此结果由记录的 `qpos` 和 XML 场景离线重建，
+并非 CSV 中存储的传感器帧。
+
 ### 3.3 Ubuntu 22.04：Docker Sim-to-Sim
 
 Docker 镜像使用 RoboStack Noetic + Python 3.11，让 ROS1 与 MuJoCo、ONNX Runtime 和

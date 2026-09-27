@@ -135,6 +135,12 @@ uv run --with pytest pytest rl-deploy-with-python/tests
 
 详细 Docker/ROS 操作见 [ROS1 Depth Sim-to-Sim](doc/ros1_depth_sim2sim.md)。
 
+### 3.5 平地速度跟踪实验
+
+平地 velocity tracking 批量实验（默认每 5°、每方向 10 次）见
+[采集、数据整理与 polar 图说明](doc/velocity_tracking.md)。三个步骤分别执行，
+先保存并校验多次重复实验数据，再生成跨重复 mean / median 误差图。
+
 ## 4. Sim-to-Real
 
 ### 4.1 安全检查

@@ -40,7 +40,8 @@ from mjlab_repts_lin_depth import (
 )
 
 class WheelfootController:
-    def __init__(self, model_dir, robot, robot_type, rl_type, start_controller):
+    def __init__(self, model_dir, robot, robot_type, rl_type, start_controller,
+                 *, depth_source=None):
         # Initialize robot and type information
         self.robot = robot
         self.robot_type = robot_type
@@ -53,6 +54,8 @@ class WheelfootController:
         self.is_mjlab_policy = self.is_mjlab_repts_lin or self.is_mjlab_repts_depth
         self.depth_hidden_state_shape = GRU_LIN_DEPTH_HIDDEN_STATE_SHAPE
         self.start_controller = start_controller
+        # An in-process simulator can provide frames at exact simulation times.
+        self._provided_depth_source = depth_source
 
         # Load configuration and model file paths based on robot type
         if self.is_mjlab_repts_depth:
@@ -276,7 +279,9 @@ class WheelfootController:
         self.predicted_lin_vel = np.zeros(3, dtype=np.float32)
         if self.is_mjlab_repts_depth:
             depth_cfg = dict(config['PointfootCfg'].get('depth', {}))
-            self.depth_source = create_depth_frame_source(depth_cfg)
+            self.depth_source = getattr(self, '_provided_depth_source', None)
+            if self.depth_source is None:
+                self.depth_source = create_depth_frame_source(depth_cfg)
 
         # Initialize variables for actions, observations, and commands
         self.proprio_history_vector = np.zeros(self.obs_history_length * self.observations_size)
@@ -468,7 +473,6 @@ class WheelfootController:
         print(tag, "encoder: disabled")
         if self.is_mjlab_repts_depth:
             print(tag, "depth source:", type(self.depth_source).__name__)
-            print(tag, "depth processing: metric meters (ONNX preprocessing)")
             if self.last_depth_input is not None:
                 print(
                     tag,

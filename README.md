@@ -48,6 +48,11 @@ Ubuntu 22.04 上不建议把 ROS1 Noetic 强行安装到宿主机。Docker 正�
 本地方式让 MuJoCo、ROS1、controller、depth viewer 和 joystick 全部直接运行在宿主机。
 宿主机需要 ROS1 Noetic、`uv`、图形桌面和可用的 OpenGL renderer。
 
+本项目支持 Python 3.10–3.12，`uv` 默认使用 `.python-version` 指定的 3.12。
+LimX SDK 依赖的 NumPy 1.26.3 不支持 Python 3.13；若旧环境执行 `uv sync` 停留在
+`Building numpy==1.26.3`，先按 `Ctrl-C` 结束旧进程，再运行 `uv sync --python 3.12 --no-build`，
+让 `uv` 使用兼容的 Python 重建虚拟环境并安装预编译包。
+
 首次运行，在仓库根目录准备 Python 与 ROS 环境：
 
 ```bash
@@ -85,23 +90,67 @@ scripts/start_sim2sim.sh
 
 不设置 `MJLAB_STATE_LOG_PATH` 时不会创建状态日志。
 
-录制完成后，可以把一段时间内的多个机器人姿态叠加到同一张图中。渲染脚本默认使用与录制
-相同的 `scene_rough_ground.xml`，因此粗糙地形也会出现在图片里；输出旁边还会生成一个 JSON，
+录制完成后，可以把一段时间内的多个机器人姿态叠加到同一张图中。渲染脚本默认读取
+仓库根目录下的 `data/state_run01.csv`（即 `wf_tron1b_deploy/data/state_run01.csv`），
+默认路径不受运行命令时的工作目录影响；也可以通过 `--csv 路径` 指定其他 CSV。
+默认场景为 `scene_rough_ground.xml`；请通过 `--scene` 指定录制时使用的场景（启动器默认是平地
+`robot.xml`）。输出旁边还会生成一个 JSON，
 记录实际使用的时间点、姿态和相机参数：
 
 ```bash
-uv run python scripts/render_state_trajectory.py \
-  --csv logs/sim2sim/state_run01.csv \
-  --start 27 --end 35 --count 7 \
-  --gl egl \
-  --output logs/sim2sim/rough_ground_trajectory.png
+uv run python scripts/render_state_trajectory.py
 ```
+
+默认渲染 `60–67` 秒内的 `9` 个姿态，机器人不透明度为 `1`，分辨率为 `3840×2160`。
+相机默认 `--lookat 5.8 0.9 0.7 --distance 4.5 --azimuth 270 --elevation -17`。
+使用 EGL 后端，输出到 `logs/sim2sim/flat_rough_flat_smooth_traj.png`；所有参数均可在
+命令行覆盖。脚本默认设置 `MESA_SHADER_CACHE_DISABLE=true`，已有环境变量设置优先。
 
 `--count` 控制叠加的姿态数量，`--ghost-alpha` 控制历史姿态透明度，`--azimuth`、
 `--elevation`、`--distance` 和 `--lookat X Y Z` 控制视角。脚本保留 CSV 中的绝对位置，
-所以机器人会沿真实轨迹分布，而不是被横向平移排列。地面默认使用中性灰色，并保留低对比度
-的米制网格线；可以用 `--floor-color R G B`、`--floor-grid-color R G B`、
-`--floor-grid-size` 和 `--floor-grid-width` 微调。
+所以机器人会沿真实轨迹分布，而不是被横向平移排列。地面默认为白色，网格默认关闭；
+`--floor-grid` 开启灰色网格线，间距为 1 米、线宽为 0.006 米。`--floor-color R G B` 调整地板颜色，
+`--floor-grid-color R G B` 调整网格颜色，`--floor-grid-size` / `--floor-grid-width`
+调整间距和线宽，`--no-floor-grid` 隐藏网格。
+
+地形障碍物默认使用绿色，可用 `--terrain-color R G B` 调整。机器人默认使用哑光外观，
+关闭镜面高光和反射；`--no-robot-matte` 可恢复模型原来的外观。额外顶光默认关闭，
+强度默认为 `0.0`；使用 `--top-light --top-light-intensity 0.35` 可开启从正上方向下
+照射的白色漫反射补光。地板自发光关闭，默认开启阴影，机器人会在地板和地形上留下
+影子；`--no-shadows` 可关闭阴影。
+这些设置仅作用于离线出图，参数会写入同名 JSON。
+
+图片默认叠加 `--start` 到 `--end` 时间区间内的三条轨迹：左轮橙红色，右轮蓝色，
+base 质心绿色。轮足使用 `wheel_L_Link` / `wheel_R_Link` 的轮心（body 原点）世界坐标；
+base 使用 `base_Link` 的惯性质心世界坐标（MuJoCo `xipos`，包含 XML 中的惯性偏移，
+不等同于根坐标或整机质心）。三条轨迹均保留高度变化，使用区间内全部 CSV 帧拟合；
+`--count` 只影响机器人姿态数量，不影响轨迹采样。
+这里 `--start` / `--end` 的单位仍是仿真秒数，轨迹不外推到未录制的时间点。
+使用 `--no-wheel-trails` 隐藏轨迹，`--wheel-trail-radius` 调整线条半径（米），
+`--wheel-left-color R G B` / `--wheel-right-color R G B` 调整颜色。base 轨迹对应
+`--no-base-trail`、`--base-trail-radius` 和 `--base-trail-color R G B`。
+三条轨迹默认不透明度为 `0.3`，使用 `--traj-alpha` 统一调整；`0` 为完全透明，
+`1` 为完全不透明。此参数独立于控制机器人历史姿态的 `--ghost-alpha`。
+
+轨迹默认使用仿真时间参数化的三维三次 B 样条平滑，并固定首尾点。可调参数：
+
+- `--traj-smoothing 0.015`：拟合 RMS 容差，单位米；增大会更平滑，减小会更贴近采样点，
+  `0` 表示穿过采样点的插值曲线。
+- `--traj-samples-per-segment 8`：每个相邻采样时间段细分的线段数，增大使曲线显示更细腻。
+- `--traj-method raw`：关闭样条拟合，直接连接原始采样点。
+
+少于 4 帧时自动降低样条阶数，单帧显示为点。平滑只改变画出的轨迹，不修改机器人姿态或
+CSV；JSON 的 `wheel_trails` / `base_trail` 保留原始 `positions_world_m`、实际绘制的
+`render_positions_world_m` 及各自时间戳，`trajectory_smoothing` 保存拟合参数。
+
+默认在 `--count` 选中的每个机器人姿态处显示半透明浅黄色轮足接触点，
+`--no-contact-points` 可关闭。使用 `--contact-point-radius 0.05` 调整标记半径（米），
+`--contact-point-color R G B` 调整颜色，`--contact-point-alpha 0.65` 调整不透明度。
+接触点用原始 `qpos` 和录制场景重新计算，
+不经过轨迹平滑；只保留轮子与环境之间的有效 MuJoCo 接触约束，包括模型 contact margin
+内的接触，无接触的悬空轮不会添加标记。CSV 未保存接触记录，因此这些是离线重建位置，
+不表示实测接触力；`--scene` 必须与录制场景一致。JSON 的 `contact_points` 保存每个
+选中姿态的接触位置、所属轮子、碰撞 geom 和距离，包含无接触时的空列表。
 
 启动器会在需要时创建本地 ROS master，然后启动 simulator、controller、可选 depth
 viewer 和虚拟遥控器。按虚拟遥控器终端中的 `Ctrl-C` 会停止全部子进程。renderer 与
